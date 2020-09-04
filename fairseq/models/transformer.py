@@ -377,11 +377,12 @@ class TransformerEncoder(FairseqEncoder):
         # average (don't discard duplicate style tokens)
         style_embed = torch.mean(self.embed_style(style_tokens), dim=1)
 
-        # embed tokens and positions, prepend style embedding
-        x = embed = self.embed_scale * torch.cat([style_embed.unsqueeze(1), self.embed_tokens(src_tokens)], dim=1)
+        # embed tokens and positions
+        embed = self.embed_tokens(src_tokens)
+        # replace first dummy token with style embedding
+        embed[:, 0, :] = style_embed
+        x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
-            # add dummy src token (just take 1st sequence token) for style embedding
-            src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
             x = embed + self.embed_positions(src_tokens)
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
@@ -413,13 +414,15 @@ class TransformerEncoder(FairseqEncoder):
                   Only populated if *return_all_hiddens* is True.
         """
 
+        # add dummy src token (just take 1st sequence token) for style embedding
+        src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
+
         x, encoder_embedding = self.forward_embedding(src_tokens, style_tokens)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
         # compute padding mask
-        # TODO make sure the first token isn't masked
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
 
         encoder_states = [] if return_all_hiddens else None
