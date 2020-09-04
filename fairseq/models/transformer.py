@@ -106,6 +106,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='dropout probability after activation in FFN.')
         parser.add_argument('--encoder-embed-path', type=str, metavar='STR',
                             help='path to pre-trained encoder embedding')
+        parser.add_argument('--style-embed-path', type=str, metavar='STR', required=True,
+                            help='path to embeddings used for style tokens')
         parser.add_argument('--encoder-embed-dim', type=int, metavar='N',
                             help='encoder embedding dimension')
         parser.add_argument('--encoder-ffn-embed-dim', type=int, metavar='N',
@@ -219,12 +221,16 @@ class TransformerModel(FairseqEncoderDecoderModel):
                 args, tgt_dict, args.decoder_embed_dim, args.decoder_embed_path
             )
 
-        encoder = cls.build_encoder(args, src_dict, encoder_embed_tokens)
+        style_embed = cls.build_embedding(
+            args, src_dict, args.encoder_embed_dim, args.style_embed_path
+        )
+
+        encoder = cls.build_encoder(args, src_dict, encoder_embed_tokens, style_embed)
         decoder = cls.build_decoder(args, tgt_dict, decoder_embed_tokens)
         return cls(args, encoder, decoder)
 
     @classmethod
-    def build_embedding(cls, args, dictionary, embed_dim, path=None):
+    def build_embedding(cls, args, dictionary, embed_dim, style_embed_path, path=None):
         num_embeddings = len(dictionary)
         padding_idx = dictionary.pad()
 
@@ -236,8 +242,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         return emb
 
     @classmethod
-    def build_encoder(cls, args, src_dict, embed_tokens):
-        return TransformerEncoder(args, src_dict, embed_tokens)
+    def build_encoder(cls, args, src_dict, embed_tokens, style_embed):
+        return TransformerEncoder(args, src_dict, embed_tokens, style_embed)
 
     @classmethod
     def build_decoder(cls, args, tgt_dict, embed_tokens):
@@ -255,10 +261,12 @@ class TransformerModel(FairseqEncoderDecoderModel):
         src_tokens,
         src_lengths,
         prev_output_tokens,
+        *,
         return_all_hiddens: bool = True,
         features_only: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
+        tgt_tokens
     ):
         """
         Run the forward pass for an encoder-decoder model.
@@ -266,8 +274,10 @@ class TransformerModel(FairseqEncoderDecoderModel):
         Copied from the base class, but without ``**kwargs``,
         which are not supported by TorchScript.
         """
+
+        # TODO remove tgt duplicates
         encoder_out = self.encoder(
-            src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens
+            src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=tgt_tokens
         )
         decoder_out = self.decoder(
             prev_output_tokens,
@@ -305,7 +315,7 @@ class TransformerEncoder(FairseqEncoder):
         embed_tokens (torch.nn.Embedding): input embedding
     """
 
-    def __init__(self, args, dictionary, embed_tokens):
+    def __init__(self, args, dictionary, embed_tokens: nn.Embedding, embed_style: nn.Embedding):
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
 
@@ -317,6 +327,7 @@ class TransformerEncoder(FairseqEncoder):
         self.max_source_positions = args.max_source_positions
 
         self.embed_tokens = embed_tokens
+        self.embed_style = embed_style
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
 
@@ -362,10 +373,15 @@ class TransformerEncoder(FairseqEncoder):
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
-    def forward_embedding(self, src_tokens):
-        # embed tokens and positions
-        x = embed = self.embed_scale * self.embed_tokens(src_tokens)
+    def forward_embedding(self, src_tokens, style_tokens):
+        # average (don't discard duplicate style tokens)
+        style_embed = torch.mean(self.embed_style(style_tokens), dim=1)
+
+        # embed tokens and positions, prepend style embedding
+        x = embed = self.embed_scale * torch.cat([style_embed.unsqueeze(1), self.embed_tokens(src_tokens)], dim=1)
         if self.embed_positions is not None:
+            # add dummy src token (just take 1st sequence token) for style embedding
+            src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
             x = embed + self.embed_positions(src_tokens)
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
@@ -374,7 +390,7 @@ class TransformerEncoder(FairseqEncoder):
             x = self.quant_noise(x)
         return x, embed
 
-    def forward(self, src_tokens, src_lengths, return_all_hiddens: bool = False):
+    def forward(self, src_tokens, src_lengths, *, return_all_hiddens: bool = False, style_tokens: torch.Tensor):
         """
         Args:
             src_tokens (LongTensor): tokens in the source language of shape
@@ -396,12 +412,14 @@ class TransformerEncoder(FairseqEncoder):
                   hidden states of shape `(src_len, batch, embed_dim)`.
                   Only populated if *return_all_hiddens* is True.
         """
-        x, encoder_embedding = self.forward_embedding(src_tokens)
+
+        x, encoder_embedding = self.forward_embedding(src_tokens, style_tokens)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
         # compute padding mask
+        # TODO make sure the first token isn't masked
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
 
         encoder_states = [] if return_all_hiddens else None
