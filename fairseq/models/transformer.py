@@ -266,7 +266,7 @@ class TransformerModel(FairseqEncoderDecoderModel):
         features_only: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
-        tgt_tokens
+        style_tokens
     ):
         """
         Run the forward pass for an encoder-decoder model.
@@ -275,9 +275,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         which are not supported by TorchScript.
         """
 
-        # TODO remove tgt duplicates
         encoder_out = self.encoder(
-            src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=tgt_tokens
+            src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens
         )
         decoder_out = self.decoder(
             prev_output_tokens,
