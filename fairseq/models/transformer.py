@@ -230,7 +230,7 @@ class TransformerModel(FairseqEncoderDecoderModel):
         return cls(args, encoder, decoder)
 
     @classmethod
-    def build_embedding(cls, args, dictionary, embed_dim, style_embed_path, path=None):
+    def build_embedding(cls, args, dictionary, embed_dim, path=None):
         num_embeddings = len(dictionary)
         padding_idx = dictionary.pad()
 
