@@ -373,8 +373,11 @@ class TransformerEncoder(FairseqEncoder):
         return TransformerEncoderLayer(args)
 
     def forward_embedding(self, src_tokens, style_tokens):
+        style_padding_mask = ~style_tokens.eq(self.padding_idx)
+        style_lens = torch.sum(style_padding_mask, dim=1)
         # average (don't discard duplicate style tokens)
-        style_embed = torch.mean(self.embed_style(style_tokens), dim=1)
+        style_embed = torch.sum(style_padding_mask[:, :, None] * self.embed_style(style_tokens), dim=1) / \
+                      style_lens[:, None]
 
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
