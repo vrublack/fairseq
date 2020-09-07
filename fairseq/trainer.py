@@ -411,6 +411,7 @@ class Trainer(object):
                 is_dummy_batch = True
             else:
                 is_dummy_batch = False
+            # net learns to produce target from target style tokens
             sample['net_input']['style_tokens'] = sample['target']
 
             def maybe_no_sync():
@@ -619,7 +620,6 @@ class Trainer(object):
                 is_dummy_batch = True
             else:
                 is_dummy_batch = False
-            sample['net_input']['style_tokens'] = sample['target']
 
             try:
                 _loss, sample_size, logging_output = self.task.valid_step(

@@ -60,8 +60,8 @@ def main(args):
     task = tasks.setup_task(args)
 
     # Load valid dataset (we load training data below, based on the latest checkpoint)
-    for valid_sub_split in args.valid_subset.split(","):
-        task.load_dataset(valid_sub_split, combine=False, epoch=1)
+    for valid_sub_split, style_sub_split in zip(args.valid_subset.split(","), args.style_subset.split(",")):
+        task.load_dataset(valid_sub_split, combine=False, epoch=1, style=style_sub_split)
 
     # Build model and criterion
     model = task.build_model(args)

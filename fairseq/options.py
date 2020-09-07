@@ -303,6 +303,10 @@ def add_preprocess_args(parser):
                        help="comma separated, test file prefixes")
     group.add_argument("--align-suffix", metavar="FP", default=None,
                        help="alignment file suffix")
+    group.add_argument("--validpref-style", default=None,
+                       help="Words/sentences to indicate style")
+    group.add_argument("--testpref-style", default=None,
+                       help="Words/sentences to indicate style")
     group.add_argument("--destdir", metavar="DIR", default="data-bin",
                        help="destination dir")
     group.add_argument("--thresholdtgt", metavar="N", default=0, type=int,
@@ -384,6 +388,10 @@ def add_dataset_args(parser, train=False, gen=False):
                            help='shard generation over N shards')
         group.add_argument('--shard-id', default=0, type=int, metavar='ID',
                            help='id of the shard to generate (id < num_shards)')
+
+    group.add_argument("--style-subset", default=None, required=True,
+                       help="Words/sentences to indicate style for the validation set")
+
     # fmt: on
     return group
 

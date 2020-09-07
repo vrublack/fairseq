@@ -95,6 +95,12 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
+    if samples[0].get('style', None) is not None:
+        style_tokens = merge('style', None)
+        style_tokens = style_tokens.index_select(0, sort_order)
+    else:
+        style_tokens = None
+
     batch = {
         'id': id,
         'nsentences': len(samples),
@@ -102,6 +108,7 @@ def collate(
         'net_input': {
             'src_tokens': src_tokens,
             'src_lengths': src_lengths,
+            'style_tokens': style_tokens
         },
         'target': target,
     }
@@ -184,6 +191,7 @@ class LanguagePairDataset(FairseqDataset):
         num_buckets=0,
         src_lang_id=None,
         tgt_lang_id=None,
+        style=None
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -191,12 +199,15 @@ class LanguagePairDataset(FairseqDataset):
             assert src_dict.unk() == tgt_dict.unk()
         if tgt is not None:
             assert len(src) == len(tgt), "Source and target must contain the same number of examples"
+        if style is not None:
+            assert len(src) == len(style), "Source and style must contain the same number of examples"
         self.src = src
         self.tgt = tgt
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
+        self.style = style
         self.left_pad_source = left_pad_source
         self.left_pad_target = left_pad_target
         self.shuffle = shuffle
@@ -277,6 +288,8 @@ class LanguagePairDataset(FairseqDataset):
             'source': src_item,
             'target': tgt_item,
         }
+        if self.style is not None:
+            example['style'] = self.style[index]
         if self.align_dataset is not None:
             example['alignment'] = self.align_dataset[index]
         return example
