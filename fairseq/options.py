@@ -389,7 +389,7 @@ def add_dataset_args(parser, train=False, gen=False):
         group.add_argument('--shard-id', default=0, type=int, metavar='ID',
                            help='id of the shard to generate (id < num_shards)')
 
-    group.add_argument("--style-subset", default=None, required=True,
+    group.add_argument("--style-subset", default=None,
                        help="Words/sentences to indicate style for the validation set")
 
     # fmt: on

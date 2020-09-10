@@ -96,10 +96,12 @@ def collate(
         ntokens = src_lengths.sum().item()
 
     if samples[0].get('style', None) is not None:
+        # explicitely condition the model on style (usually during validation)
         style_tokens = merge('style', None)
         style_tokens = style_tokens.index_select(0, sort_order)
     else:
-        style_tokens = None
+        # net learns to produce target from target style tokens
+        style_tokens = target
 
     batch = {
         'id': id,
