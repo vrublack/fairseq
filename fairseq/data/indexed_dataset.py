@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from . import FairseqDataset
+from .paraphrase_dataset import ParaphraseDataset
 
 
 def __best_fitting_dtype(vocab_size=None):
@@ -52,6 +53,9 @@ def make_dataset(path, impl, fix_lua_indexing=False, dictionary=None):
     if impl == 'raw' and IndexedRawTextDataset.exists(path):
         assert dictionary is not None
         return IndexedRawTextDataset(path, dictionary)
+    elif impl == 'paraphrase' and ParaphraseDataset.exists(path):
+        assert dictionary is not None
+        return ParaphraseDataset(path, dictionary)
     elif impl == 'lazy' and IndexedDataset.exists(path):
         return IndexedDataset(path, fix_lua_indexing=fix_lua_indexing)
     elif impl == 'cached' and IndexedDataset.exists(path):

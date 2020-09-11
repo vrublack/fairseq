@@ -17,18 +17,17 @@ class ParaphraseDataset(FairseqDataset):
         self.sentence_tokens_list = []
         self.phrase_tokens_list = []
         self.paraphrase_tokens_list = []
-        self.lines = []
         self.sizes = []
         self.append_eos = append_eos
         self.reverse_order = reverse_order
+        self.prepend_phrase_token = prepend_phrase_token
+        self.insert_gap_token = insert_gap_token
 
         for symbol in [self.PHRASE_TOK, self.GAP_TOK]:
             dictionary.add_symbol(symbol)
 
         self.read_data(path, dictionary)
-        self.size = len(self.sentence_tokens_list)
-        self.prepend_phrase_token = prepend_phrase_token
-        self.insert_gap_token = insert_gap_token
+        self.length = len(self.sentence_tokens_list)
 
     def read_data(self, path, dictionary):
         with open(path, 'r', encoding='utf-8') as f:
@@ -65,7 +64,7 @@ class ParaphraseDataset(FairseqDataset):
         self.sizes = np.array(self.sizes)
 
     def check_index(self, i):
-        if i < 0 or i >= self.size:
+        if i < 0 or i >= self.length:
             raise IndexError('index out of range')
 
     @lru_cache(maxsize=8)
@@ -77,7 +76,7 @@ class ParaphraseDataset(FairseqDataset):
         pass
 
     def __len__(self):
-        return self.size
+        return self.length
 
     def num_tokens(self, index):
         return self.sizes[index]
