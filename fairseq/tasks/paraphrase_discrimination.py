@@ -5,6 +5,7 @@
 
 import logging
 import os
+import os.path as osp
 
 import numpy as np
 
@@ -25,7 +26,6 @@ from fairseq.data import (
 )
 from fairseq.data.shorten_dataset import maybe_shorten_dataset
 from fairseq.tasks import FairseqTask, register_task
-
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,8 @@ class ParaphraseDiscriminationTask(FairseqTask):
                                  'e.g., "train,valid" (default: all dataset splits)')
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
+        parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
+                            help='How to combine the seq length dimension of the lstm output')
 
     def __init__(self, args, dictionary):
         super().__init__(args)
@@ -86,25 +88,43 @@ class ParaphraseDiscriminationTask(FairseqTask):
     def load_dataset(self, split, combine=False, **kwargs):
         """Load a given dataset split (e.g., train, valid, test)."""
 
-        def get_path(split):
-            return os.path.join(self.args.data, split)
-
-        dataset = data_utils.load_indexed_dataset(
-            get_path(split),
-            self.dictionary,
-            'paraphrase',
-            combine=combine,
-        )
+        comps = {}
+        comp_names = ['sentences', 'phrases', 'paraphrases']
+        for component in comp_names:
+            comps[component] = data_utils.load_indexed_dataset(
+                osp.join(self.args.data, split, component),
+                self.dictionary,
+                'raw',
+                combine=combine,
+            )
 
         dataset = {
             'id': IdDataset(),
             'net_input': {
-                'src_tokens': dataset,
-                'src_lengths': NumelDataset(src_tokens, reduce=False),
             },
+            'anchor_tokens': RightPadDataset(
+                comps['sentences'],
+                pad_idx=self.source_dictionary.pad(),
+            ),
+            'positive_tokens': RightPadDataset(
+                comps['phrases'],
+                pad_idx=self.source_dictionary.pad(),
+            ),
+            'negative_tokens': RightPadDataset(
+                comps['paraphrases'],
+                pad_idx=self.source_dictionary.pad(),
+            ),
+            'anchor_lengths': NumelDataset(comps['sentences']),
+            'positive_lengths': NumelDataset(comps['phrases']),
+            'negative_lengths': NumelDataset(comps['paraphrases']),
             'nsentences': NumSamplesDataset(),
-            'ntokens': NumelDataset(src_tokens, reduce=True),
+            'ntokens': NumelDataset(comps['sentences'], reduce=True),
         }
+
+        dataset = NestedDictionaryDataset(
+            dataset,
+            sizes=np.array([comps[component].sizes for component in comp_names]).max(0),
+        )
 
         if not self.args.no_shuffle:
             with data_utils.numpy_seed(self.args.seed):
@@ -122,13 +142,14 @@ class ParaphraseDiscriminationTask(FairseqTask):
 
     def build_model(self, args):
         from fairseq import models
+
+        assert args.arch == 'lstm_encoder'
+
         model = models.build_model(args, self)
 
-        # TODO
-        # model.register_triplet_loss_head(
-        #     getattr(args, 'ranking_head_name', 'sentence_classification_head'),
-        #     num_classes=1,
-        # )
+        model.set_sequence_embedding_head(
+            getattr(args, 'seq_embedding_reduction')
+        )
 
         return model
 

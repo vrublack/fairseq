@@ -20,7 +20,7 @@ class TripletLossCriterion(FairseqCriterion):
     @staticmethod
     def add_args(parser):
         # fmt: off
-        parser.add_argument('--margin')
+        parser.add_argument('--margin', type=float, default=1)
         # fmt: on
 
     def forward(self, model, sample, reduce=True):
@@ -34,15 +34,18 @@ class TripletLossCriterion(FairseqCriterion):
 
         assert (
                 hasattr(model, 'sequence_embedding_head')
-                and model.sequence_embedding_head
+                and model.sequence_embedding_head is not None
         ), 'model must provide sequence embedding head for --criterion=triplet_loss'
 
-        anchor = model(model(**sample['net_input']), src_tokens=sample['sentence_tokens'],
-                       src_lengths=sample['sentence_lengths'])
-        positive = model(model(**sample['net_input']), src_tokens=sample['phrase_tokens'],
-                         src_lengths=sample['phrase_lengths'])
-        negative = model(model(**sample['net_input']), src_tokens=sample['paraphrase_tokens'],
-                         src_lengths=sample['paraphrase_lengths'])
+        anchor = model(src_tokens=sample['anchor_tokens'],
+                       src_lengths=sample['anchor_lengths'],
+                       enforce_sorted=False)
+        positive = model(src_tokens=sample['positive_tokens'],
+                         src_lengths=sample['positive_lengths'],
+                         enforce_sorted=False)
+        negative = model(src_tokens=sample['negative_tokens'],
+                         src_lengths=sample['negative_lengths'],
+                         enforce_sorted=False)
 
         distance_positive = (anchor - positive).pow(2).sum(1)
         distance_negative = (anchor - negative).pow(2).sum(1)
@@ -54,7 +57,7 @@ class TripletLossCriterion(FairseqCriterion):
             'distance_positive': distance_positive.detach().sum(),
             'distance_negative': distance_negative.detach().sum(),
             'ntokens': sample['ntokens'],
-            'nsentences': sample['sentence_tokens'].size(0),
+            'nsentences': sample['anchor_tokens'].size(0),
             'sample_size': sample_size
         }
 

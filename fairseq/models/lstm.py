@@ -13,15 +13,41 @@ from fairseq.models import (
     FairseqIncrementalDecoder,
     FairseqEncoderDecoderModel,
     register_model,
-    register_model_architecture,
+    register_model_architecture, FairseqEncoderModel,
 )
 from fairseq.modules import AdaptiveSoftmax, FairseqDropout
 from torch import Tensor
 from typing import Dict, List, Optional, Tuple
 
-
 DEFAULT_MAX_SOURCE_POSITIONS = 1e5
 DEFAULT_MAX_TARGET_POSITIONS = 1e5
+
+
+class LSTMSequenceEmbeddingHead(nn.Module):
+    def __init__(self, reduction):
+        super().__init__()
+        if reduction == 'mean':
+            self.average = True
+        elif reduction == 'max':
+            self.average = False
+        else:
+            raise NotImplementedError('Unknown reduction operation ' + str(reduction))
+
+    def forward(self, x, encoder_padding_mask):
+        """
+
+        :param x: seq_len x batch x hidden
+        :param encoder_padding_mask: seq_len x batch
+        :return:
+        """
+
+        seq_mask = ~encoder_padding_mask
+        seq_lens = torch.sum(seq_mask, dim=0)
+        if self.average:
+            return torch.sum(seq_mask[:, :, None] * x, dim=0) / seq_lens[:, None]
+        else:
+            x.masked_fill_(encoder_padding_mask[:, :, None], -float('inf'))
+            return torch.max(x, dim=0)[0]
 
 
 @register_model('lstm')
@@ -195,6 +221,95 @@ class LSTMModel(FairseqEncoderDecoderModel):
         return decoder_out
 
 
+@register_model('lstm_encoder')
+class LSTMEncoderModel(FairseqEncoderModel):
+    def __init__(self, encoder):
+        super().__init__(encoder)
+
+        self.sequence_embedding_head = None
+
+
+    @staticmethod
+    def add_args(parser):
+        """Add model-specific arguments to the parser."""
+        # fmt: off
+        parser.add_argument('--dropout', type=float, metavar='D',
+                            help='dropout probability')
+        parser.add_argument('--encoder-embed-dim', type=int, metavar='N',
+                            help='encoder embedding dimension')
+        parser.add_argument('--encoder-embed-path', type=str, metavar='STR',
+                            help='path to pre-trained encoder embedding')
+        parser.add_argument('--encoder-freeze-embed', action='store_true',
+                            help='freeze encoder embeddings')
+        parser.add_argument('--encoder-hidden-size', type=int, metavar='N',
+                            help='encoder hidden size')
+        parser.add_argument('--encoder-layers', type=int, metavar='N',
+                            help='number of encoder layers')
+        parser.add_argument('--encoder-bidirectional', action='store_true',
+                            help='make all layers of encoder bidirectional')
+
+        # Granular dropout settings (if not specified these default to --dropout)
+        parser.add_argument('--encoder-dropout-in', type=float, metavar='D',
+                            help='dropout probability for encoder input embedding')
+        parser.add_argument('--encoder-dropout-out', type=float, metavar='D',
+                            help='dropout probability for encoder output')
+        # fmt: on
+
+    @classmethod
+    def build_model(cls, args, task):
+        """Build a new model instance."""
+        # make sure that all args are properly defaulted (in case there are any new ones)
+        base_architecture(args)
+
+        max_source_positions = getattr(args, 'max_source_positions', DEFAULT_MAX_SOURCE_POSITIONS)
+
+        def load_pretrained_embedding_from_file(embed_path, dictionary, embed_dim):
+            num_embeddings = len(dictionary)
+            padding_idx = dictionary.pad()
+            embed_tokens = Embedding(num_embeddings, embed_dim, padding_idx)
+            embed_dict = utils.parse_embedding(embed_path)
+            utils.print_embed_overlap(embed_dict, dictionary)
+            return utils.load_embedding(embed_dict, dictionary, embed_tokens)
+
+        if args.encoder_embed_path:
+            pretrained_encoder_embed = load_pretrained_embedding_from_file(
+                args.encoder_embed_path, task.source_dictionary, args.encoder_embed_dim)
+        else:
+            num_embeddings = len(task.source_dictionary)
+            pretrained_encoder_embed = Embedding(
+                num_embeddings, args.encoder_embed_dim, task.source_dictionary.pad()
+            )
+
+        if args.encoder_freeze_embed:
+            pretrained_encoder_embed.weight.requires_grad = False
+
+        encoder = LSTMEncoder(
+            dictionary=task.source_dictionary,
+            embed_dim=args.encoder_embed_dim,
+            hidden_size=args.encoder_hidden_size,
+            num_layers=args.encoder_layers,
+            dropout_in=args.encoder_dropout_in,
+            dropout_out=args.encoder_dropout_out,
+            bidirectional=args.encoder_bidirectional,
+            pretrained_embed=pretrained_encoder_embed,
+            max_source_positions=max_source_positions,
+        )
+        return cls(encoder)
+
+    def set_sequence_embedding_head(self, reduction):
+        self.sequence_embedding_head = LSTMSequenceEmbeddingHead(reduction)
+
+    def forward(
+        self,
+        src_tokens,
+        src_lengths,
+        enforce_sorted=True
+    ):
+        encoder_out = self.encoder(src_tokens, src_lengths=src_lengths, seq_embedding_head=self.sequence_embedding_head,
+                                   enforce_sorted=enforce_sorted)
+        return encoder_out
+
+
 class LSTMEncoder(FairseqEncoder):
     """LSTM encoder."""
     def __init__(
@@ -236,6 +351,7 @@ class LSTMEncoder(FairseqEncoder):
         src_tokens: Tensor,
         src_lengths: Tensor,
         enforce_sorted: bool = True,
+        seq_embedding_head = None
     ):
         """
         Args:
@@ -291,12 +407,15 @@ class LSTMEncoder(FairseqEncoder):
 
         encoder_padding_mask = src_tokens.eq(self.padding_idx).t()
 
-        return tuple((
-            x,  # seq_len x batch x hidden
-            final_hiddens,  # num_layers x batch x num_directions*hidden
-            final_cells,  # num_layers x batch x num_directions*hidden
-            encoder_padding_mask,  # seq_len x batch
-        ))
+        if seq_embedding_head is not None:
+            return seq_embedding_head(x, encoder_padding_mask)
+        else:
+            return tuple((
+                x,  # seq_len x batch x hidden
+                final_hiddens,  # num_layers x batch x num_directions*hidden
+                final_cells,  # num_layers x batch x num_directions*hidden
+                encoder_padding_mask,  # seq_len x batch
+            ))
 
     def combine_bidir(self, outs, bsz: int):
         out = outs.view(self.num_layers, 2, bsz, -1).transpose(1, 2).contiguous()
@@ -679,3 +798,16 @@ def lstm_luong_wmt_en_de(args):
     args.decoder_out_embed_dim = getattr(args, 'decoder_out_embed_dim', 1000)
     args.decoder_dropout_out = getattr(args, 'decoder_dropout_out', 0)
     base_architecture(args)
+
+
+@register_model_architecture('lstm_encoder', 'lstm_encoder')
+def base_architecture(args):
+    args.dropout = getattr(args, 'dropout', 0.1)
+    args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
+    args.encoder_embed_path = getattr(args, 'encoder_embed_path', None)
+    args.encoder_freeze_embed = getattr(args, 'encoder_freeze_embed', False)
+    args.encoder_hidden_size = getattr(args, 'encoder_hidden_size', args.encoder_embed_dim)
+    args.encoder_layers = getattr(args, 'encoder_layers', 1)
+    args.encoder_bidirectional = getattr(args, 'encoder_bidirectional', False)
+    args.encoder_dropout_in = getattr(args, 'encoder_dropout_in', args.dropout)
+    args.encoder_dropout_out = getattr(args, 'encoder_dropout_out', args.dropout)
