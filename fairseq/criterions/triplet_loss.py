@@ -60,6 +60,7 @@ class TripletLossCriterion(FairseqCriterion):
             'nsentences': sample['anchor_tokens'].size(0),
             'sample_size': sample_size
         }
+        logging_output['distance_diff'] = logging_output['distance_positive'] - logging_output['distance_negative']
 
         return loss, sample_size, logging_output
 
@@ -69,11 +70,13 @@ class TripletLossCriterion(FairseqCriterion):
         loss_sum = sum(log.get('loss', 0) for log in logging_outputs)
         distance_positive_sum = sum(log.get('distance_positive', 0) for log in logging_outputs)
         distance_negative_sum = sum(log.get('distance_negative', 0) for log in logging_outputs)
+        distance_diff_sum = sum(log.get('distance_diff', 0) for log in logging_outputs)
         sample_size = sum(log.get('sample_size', 0) for log in logging_outputs)
 
-        metrics.log_scalar('loss', loss_sum / sample_size / math.log(2), sample_size, round=3)
-        metrics.log_scalar('distance_positive', distance_positive_sum / sample_size / math.log(2), sample_size, round=3)
-        metrics.log_scalar('distance_negative', distance_negative_sum / sample_size / math.log(2), sample_size, round=3)
+        metrics.log_scalar('loss', loss_sum / sample_size, sample_size, round=3)
+        metrics.log_scalar('distance_positive', distance_positive_sum / sample_size, sample_size, round=3)
+        metrics.log_scalar('distance_negative', distance_negative_sum / sample_size, sample_size, round=3)
+        metrics.log_scalar('distance_diff', distance_diff_sum / sample_size, sample_size, round=3)
 
     @staticmethod
     def logging_outputs_can_be_summed() -> bool:
