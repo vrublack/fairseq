@@ -4,7 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 """
-Translate raw text with a trained model. Batches data on-the-fly.
+Extracts sequence embeddings from trained model. Batches data on-the-fly.
 """
 
 from collections import namedtuple
