@@ -22,6 +22,7 @@ def collate(
     left_pad_target=False,
     input_feeding=True,
     pad_to_length=None,
+    condition_style=False
 ):
     if len(samples) == 0:
         return {}
@@ -99,9 +100,11 @@ def collate(
         # explicitely condition the model on style (usually during validation)
         style_tokens = merge('style', None)
         style_tokens = style_tokens.index_select(0, sort_order)
-    else:
+    elif condition_style:
         # net learns to produce target from target style tokens
         style_tokens = target
+    else:
+        style_tokens = None
 
     batch = {
         'id': id,
@@ -109,11 +112,13 @@ def collate(
         'ntokens': ntokens,
         'net_input': {
             'src_tokens': src_tokens,
-            'src_lengths': src_lengths,
-            'style_tokens': style_tokens
+            'src_lengths': src_lengths
         },
         'target': target,
     }
+    if style_tokens is not None:
+        batch['net_input']['style_tokens'] = style_tokens
+
     if prev_output_tokens is not None:
         batch['net_input']['prev_output_tokens'] = prev_output_tokens.index_select(0, sort_order)
 
@@ -193,7 +198,8 @@ class LanguagePairDataset(FairseqDataset):
         num_buckets=0,
         src_lang_id=None,
         tgt_lang_id=None,
-        style=None
+        style_data=None,
+        condition_style=False
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -201,15 +207,16 @@ class LanguagePairDataset(FairseqDataset):
             assert src_dict.unk() == tgt_dict.unk()
         if tgt is not None:
             assert len(src) == len(tgt), "Source and target must contain the same number of examples"
-        if style is not None:
-            assert len(src) == len(style), "Source and style must contain the same number of examples"
+        if style_data is not None:
+            assert len(src) == len(style_data), "Source and style must contain the same number of examples"
         self.src = src
         self.tgt = tgt
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
-        self.style = style
+        self.style = style_data
+        self.condition_style = condition_style
         self.left_pad_source = left_pad_source
         self.left_pad_target = left_pad_target
         self.shuffle = shuffle
@@ -343,6 +350,7 @@ class LanguagePairDataset(FairseqDataset):
             left_pad_target=self.left_pad_target,
             input_feeding=self.input_feeding,
             pad_to_length=pad_to_length,
+            condition_style=self.condition_style
         )
         if self.src_lang_id is not None or self.tgt_lang_id is not None:
             src_tokens = res['net_input']['src_tokens']

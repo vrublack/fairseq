@@ -106,8 +106,6 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='dropout probability after activation in FFN.')
         parser.add_argument('--encoder-embed-path', type=str, metavar='STR',
                             help='path to pre-trained encoder embedding')
-        parser.add_argument('--style-embed-path', type=str, metavar='STR', required=True,
-                            help='path to embeddings used for style tokens')
         parser.add_argument('--encoder-embed-dim', type=int, metavar='N',
                             help='encoder embedding dimension')
         parser.add_argument('--encoder-ffn-embed-dim', type=int, metavar='N',
@@ -221,9 +219,12 @@ class TransformerModel(FairseqEncoderDecoderModel):
                 args, tgt_dict, args.decoder_embed_dim, args.decoder_embed_path
             )
 
-        style_embed = cls.build_embedding(
-            args, src_dict, args.encoder_embed_dim, args.style_embed_path
-        )
+        if hasattr(args, 'style_embed_path'):
+            style_embed = cls.build_embedding(
+                args, src_dict, args.encoder_embed_dim, args.style_embed_path
+            )
+        else:
+            style_embed = None
 
         encoder = cls.build_encoder(args, src_dict, encoder_embed_tokens, style_embed)
         decoder = cls.build_decoder(args, tgt_dict, decoder_embed_tokens)
@@ -261,12 +262,11 @@ class TransformerModel(FairseqEncoderDecoderModel):
         src_tokens,
         src_lengths,
         prev_output_tokens,
-        *,
         return_all_hiddens: bool = True,
         features_only: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
-        style_tokens
+        style_tokens = None
     ):
         """
         Run the forward pass for an encoder-decoder model.
@@ -373,16 +373,20 @@ class TransformerEncoder(FairseqEncoder):
         return TransformerEncoderLayer(args)
 
     def forward_embedding(self, src_tokens, style_tokens):
-        style_padding_mask = ~style_tokens.eq(self.padding_idx)
-        style_lens = torch.sum(style_padding_mask, dim=1)
-        # average (don't discard duplicate style tokens)
-        style_embed = torch.sum(style_padding_mask[:, :, None] * self.embed_style(style_tokens), dim=1) / \
-                      style_lens[:, None]
+        if style_tokens is not None:
+            style_padding_mask = ~style_tokens.eq(self.padding_idx)
+            style_lens = torch.sum(style_padding_mask, dim=1)
+            # average (don't discard duplicate style tokens)
+            style_embed = torch.sum(style_padding_mask[:, :, None] * self.embed_style(style_tokens), dim=1) / \
+                          style_lens[:, None]
 
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
-        # replace first dummy token with style embedding
-        embed[:, 0, :] = style_embed
+
+        if style_tokens is not None:
+            # replace first dummy token with style embedding
+            embed[:, 0, :] = style_embed
+
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
             x = embed + self.embed_positions(src_tokens)
@@ -393,7 +397,7 @@ class TransformerEncoder(FairseqEncoder):
             x = self.quant_noise(x)
         return x, embed
 
-    def forward(self, src_tokens, src_lengths, *, return_all_hiddens: bool = False, style_tokens: torch.Tensor):
+    def forward(self, src_tokens, src_lengths, return_all_hiddens: bool = False, style_tokens: torch.Tensor = None):
         """
         Args:
             src_tokens (LongTensor): tokens in the source language of shape
@@ -417,7 +421,8 @@ class TransformerEncoder(FairseqEncoder):
         """
 
         # add dummy src token (just take 1st sequence token) for style embedding
-        src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
+        if style_tokens is not None:
+            src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
 
         x, encoder_embedding = self.forward_embedding(src_tokens, style_tokens)
 

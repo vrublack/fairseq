@@ -263,7 +263,8 @@ def main(args):
     make_all(args.source_lang, src_dict, args.trainpref, args.validpref, args.testpref)
     if target:
         make_all(args.target_lang, tgt_dict, args.trainpref, args.validpref, args.testpref)
-        make_all(args.target_lang, tgt_dict, None, args.validpref_style, args.testpref_style, style=True)
+        if args.validpref_style is not None:
+            make_all(args.target_lang, tgt_dict, None, args.validpref_style, args.testpref_style, style=True)
     if args.align_suffix:
         make_all_alignments()
 
