@@ -39,6 +39,17 @@ def get_generation_parser(interactive=False, default_task="translation"):
     return parser
 
 
+def get_extraction_parser(interactive=False, default_task="translation"):
+    parser = get_parser("Extraction", default_task)
+    add_dataset_args(parser, gen=True)
+    add_distributed_training_args(parser, default_world_size=1)
+    if interactive:
+        add_interactive_args(parser)
+    group = parser.add_argument_group("Extraction")
+    add_common_eval_args(group)
+    return parser
+
+
 def get_interactive_generation_parser(default_task="translation"):
     return get_generation_parser(interactive=True, default_task=default_task)
 

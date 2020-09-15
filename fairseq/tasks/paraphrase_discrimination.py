@@ -9,22 +9,17 @@ import os.path as osp
 
 import numpy as np
 
-from fairseq import utils
 from fairseq.data import (
-    ConcatSentencesDataset,
     data_utils,
     Dictionary,
     IdDataset,
     NestedDictionaryDataset,
     NumSamplesDataset,
     NumelDataset,
-    PrependTokenDataset,
-    RawLabelDataset,
     RightPadDataset,
     SortDataset,
-    TruncateDataset
+    TokenBlockDataset
 )
-from fairseq.data.shorten_dataset import maybe_shorten_dataset
 from fairseq.tasks import FairseqTask, register_task
 
 logger = logging.getLogger(__name__)
@@ -140,6 +135,26 @@ class ParaphraseDiscriminationTask(FairseqTask):
         self.datasets[split] = dataset
         return self.datasets[split]
 
+    def build_dataset_for_inference(self, src_tokens, src_lengths):
+        dataset = TokenBlockDataset(
+            src_tokens,
+            src_lengths,
+            block_size=None,  # ignored for "eos" break mode
+            pad=self.source_dictionary.pad(),
+            eos=self.source_dictionary.eos(),
+            break_mode="eos",
+        )
+        return NestedDictionaryDataset(
+            {
+                "id": IdDataset(),
+                "net_input": {
+                    "src_tokens": RightPadDataset(dataset, pad_idx=self.source_dictionary.pad()),
+                    "src_lengths": NumelDataset(dataset),
+                }
+            },
+            sizes=[np.array(src_lengths)],
+        )
+
     def build_model(self, args):
         from fairseq import models
 
@@ -163,3 +178,6 @@ class ParaphraseDiscriminationTask(FairseqTask):
     @property
     def target_dictionary(self):
         return self.dictionary
+
+    def extract_sequence_embeddings_step(self, sample, model):
+        return model(**sample['net_input'])

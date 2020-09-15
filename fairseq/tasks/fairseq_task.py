@@ -399,6 +399,9 @@ class FairseqTask(object):
         with torch.no_grad():
             return generator.generate(models, sample, prefix_tokens=prefix_tokens)
 
+    def extract_sequence_embeddings_step(self, sample, model):
+        raise NotImplementedError
+
     def begin_epoch(self, epoch, model):
         """Hook function called before the start of each epoch."""
         pass
