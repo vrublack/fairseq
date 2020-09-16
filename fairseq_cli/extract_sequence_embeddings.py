@@ -143,7 +143,7 @@ def main(args):
         # sort output to match input order
         for id, emb in sorted(results, key=lambda x: x[0]):
             space_separated = str(' '.join(map(str, emb.detach().numpy())))
-            print(space_separated)
+            print('Sequence embedding: ' + space_separated)
 
         # update running id counter
         start_id += len(inputs)
