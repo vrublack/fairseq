@@ -323,6 +323,10 @@ class LSTMEncoderModel(FairseqEncoderModel):
         aux_lengths=None,
         classification_head_name=None   # ignored
     ):
+        # fixes CUDA error: an illegal memory access was encountered
+        # TODO better solution
+        torch.backends.cudnn.deterministic = True
+
         x = self.encoder(src_tokens, src_lengths=src_lengths, enforce_sorted=False)
 
         if self.sequence_embedding_head is not None:
