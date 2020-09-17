@@ -229,7 +229,7 @@ class LSTMEncoderModel(FairseqEncoderModel):
 
         self.args = args
         self.sequence_embedding_head = None
-        self.classification_heads = {}
+        self.classification_heads = nn.ModuleDict()
         self.classification_head_name = None
 
     @staticmethod
