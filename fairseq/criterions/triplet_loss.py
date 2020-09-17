@@ -38,14 +38,11 @@ class TripletLossCriterion(FairseqCriterion):
         ), 'model must provide sequence embedding head for --criterion=triplet_loss'
 
         anchor = model(src_tokens=sample['anchor_tokens'],
-                       src_lengths=sample['anchor_lengths'],
-                       enforce_sorted=False)
+                       src_lengths=sample['anchor_lengths'])
         positive = model(src_tokens=sample['positive_tokens'],
-                         src_lengths=sample['positive_lengths'],
-                         enforce_sorted=False)
+                         src_lengths=sample['positive_lengths'])
         negative = model(src_tokens=sample['negative_tokens'],
-                         src_lengths=sample['negative_lengths'],
-                         enforce_sorted=False)
+                         src_lengths=sample['negative_lengths'])
 
         distance_positive = (anchor - positive).pow(2).sum(1)
         distance_negative = (anchor - negative).pow(2).sum(1)

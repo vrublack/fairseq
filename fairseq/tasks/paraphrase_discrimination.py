@@ -8,6 +8,7 @@ import os
 import os.path as osp
 
 import numpy as np
+import torch
 
 from fairseq.data import (
     data_utils,
@@ -20,6 +21,7 @@ from fairseq.data import (
     SortDataset,
     TokenBlockDataset
 )
+from fairseq.data.tensor_dataset import TensorDataset
 from fairseq.tasks import FairseqTask, register_task
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,8 @@ class ParaphraseDiscriminationTask(FairseqTask):
 
     def __init__(self, args, dictionary):
         super().__init__(args)
+
+        self.args = args
         self.dictionary = dictionary
 
     @classmethod
@@ -68,8 +72,11 @@ class ParaphraseDiscriminationTask(FairseqTask):
 
     @classmethod
     def setup_task(cls, args, **kwargs):
-        assert args.criterion == 'triplet_loss', \
-            'Must set --criterion=triplet_loss'
+        assert args.criterion == 'triplet_loss' or args.criterion == 'sentence_ranking', \
+            'Must set --criterion=triplet_loss or sentence_ranking'
+
+        if args.criterion == 'sentence_ranking':
+            args.num_classes = 2
 
         # load data dictionary
         data_dict = cls.load_dictionary(
@@ -93,28 +100,48 @@ class ParaphraseDiscriminationTask(FairseqTask):
                 combine=combine,
             )
 
-        dataset = {
-            'id': IdDataset(),
-            'net_input': {
-            },
-            'anchor_tokens': RightPadDataset(
-                comps['sentences'],
-                pad_idx=self.source_dictionary.pad(),
-            ),
-            'positive_tokens': RightPadDataset(
-                comps['phrases'],
-                pad_idx=self.source_dictionary.pad(),
-            ),
-            'negative_tokens': RightPadDataset(
-                comps['paraphrases'],
-                pad_idx=self.source_dictionary.pad(),
-            ),
-            'anchor_lengths': NumelDataset(comps['sentences']),
-            'positive_lengths': NumelDataset(comps['phrases']),
-            'negative_lengths': NumelDataset(comps['paraphrases']),
-            'nsentences': NumSamplesDataset(),
-            'ntokens': NumelDataset(comps['sentences'], reduce=True),
-        }
+        if self.args.criterion == 'sentence_ranking':
+            dataset = {
+                'id': IdDataset(),
+                'net_input1': {
+                    'src_tokens': RightPadDataset(comps['sentences'], pad_idx=self.source_dictionary.pad()),
+                    'src_lengths': NumelDataset(comps['sentences']),
+                    'aux_tokens': RightPadDataset(comps['phrases'], pad_idx=self.source_dictionary.pad()),
+                    'aux_lengths': NumelDataset(comps['phrases'])
+                },
+                'net_input2': {
+                    'src_tokens': RightPadDataset(comps['sentences'], pad_idx=self.source_dictionary.pad()),
+                    'src_lengths': NumelDataset(comps['sentences']),
+                    'aux_tokens': RightPadDataset(comps['paraphrases'], pad_idx=self.source_dictionary.pad()),
+                    'aux_lengths': NumelDataset(comps['paraphrases'])
+                },
+                'target': TensorDataset(torch.tensor([0] * len(comps['sentences']), dtype=torch.long)),
+                'nsentences': NumSamplesDataset(),
+                'ntokens': NumelDataset(comps['sentences'], reduce=True),
+            }
+        else:
+            dataset = {
+                'id': IdDataset(),
+                'net_input': {
+                },
+                'anchor_tokens': RightPadDataset(
+                    comps['sentences'],
+                    pad_idx=self.source_dictionary.pad(),
+                ),
+                'positive_tokens': RightPadDataset(
+                    comps['phrases'],
+                    pad_idx=self.source_dictionary.pad(),
+                ),
+                'negative_tokens': RightPadDataset(
+                    comps['paraphrases'],
+                    pad_idx=self.source_dictionary.pad(),
+                ),
+                'anchor_lengths': NumelDataset(comps['sentences']),
+                'positive_lengths': NumelDataset(comps['phrases']),
+                'negative_lengths': NumelDataset(comps['paraphrases']),
+                'nsentences': NumSamplesDataset(),
+                'ntokens': NumelDataset(comps['sentences'], reduce=True),
+            }
 
         dataset = NestedDictionaryDataset(
             dataset,
@@ -166,6 +193,9 @@ class ParaphraseDiscriminationTask(FairseqTask):
             getattr(args, 'seq_embedding_reduction')
         )
 
+        if args.criterion == 'sentence_ranking':
+            model.set_classification_head()
+
         return model
 
     def max_positions(self):
@@ -180,4 +210,5 @@ class ParaphraseDiscriminationTask(FairseqTask):
         return self.dictionary
 
     def extract_sequence_embeddings_step(self, sample, model):
+        model.remove_classification_head()
         return model(**sample['net_input'])

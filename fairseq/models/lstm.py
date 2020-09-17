@@ -15,6 +15,7 @@ from fairseq.models import (
     register_model,
     register_model_architecture, FairseqEncoderModel,
 )
+from fairseq.models.bart import BARTClassificationHead
 from fairseq.modules import AdaptiveSoftmax, FairseqDropout
 from torch import Tensor
 from typing import Dict, List, Optional, Tuple
@@ -223,11 +224,13 @@ class LSTMModel(FairseqEncoderDecoderModel):
 
 @register_model('lstm_encoder')
 class LSTMEncoderModel(FairseqEncoderModel):
-    def __init__(self, encoder):
+    def __init__(self, args, encoder):
         super().__init__(encoder)
 
+        self.args = args
         self.sequence_embedding_head = None
-
+        self.classification_heads = {}
+        self.classification_head_name = None
 
     @staticmethod
     def add_args(parser):
@@ -294,20 +297,49 @@ class LSTMEncoderModel(FairseqEncoderModel):
             pretrained_embed=pretrained_encoder_embed,
             max_source_positions=max_source_positions,
         )
-        return cls(encoder)
+        return cls(args, encoder)
 
     def set_sequence_embedding_head(self, reduction):
         self.sequence_embedding_head = LSTMSequenceEmbeddingHead(reduction)
+
+    def set_classification_head(self):
+        # have a dict with only one head to comply with the structure required by the sentence ranking loss
+        self.classification_head_name = 'sentence_classification_head'
+        self.classification_heads[self.classification_head_name] = \
+            BARTClassificationHead(2 * self.args.encoder_hidden_size, self.args.encoder_hidden_size,
+                                   1, 'relu', self.args.encoder_dropout_out)
+
+    def remove_classification_head(self):
+        if self.classification_head_name is not None:
+            del self.classification_heads[self.classification_head_name]
+            self.classification_head_name = None
+
 
     def forward(
         self,
         src_tokens,
         src_lengths,
-        enforce_sorted=True
+        aux_tokens=None,
+        aux_lengths=None,
+        classification_head_name=None   # ignored
     ):
-        encoder_out = self.encoder(src_tokens, src_lengths=src_lengths, seq_embedding_head=self.sequence_embedding_head,
-                                   enforce_sorted=enforce_sorted)
-        return encoder_out
+        x = self.encoder(src_tokens, src_lengths=src_lengths, enforce_sorted=False)
+
+        if self.sequence_embedding_head is not None:
+            x = self.sequence_embedding_head(x[0], x[3])
+
+        if self.classification_heads:
+            assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
+            assert aux_tokens is not None, "Classification head requires auxiliary tokens"
+
+            x_aux = self.encoder(aux_tokens, src_lengths=aux_lengths, enforce_sorted=False)
+            x_aux = self.sequence_embedding_head(x_aux[0], x_aux[3])
+            # combine main and auxiliary embeddings
+            x = self.classification_heads[self.classification_head_name](torch.cat((x, x_aux), dim=1))
+            # add dummy because the sentence ranking loss expects this
+            x = x, None
+
+        return x
 
 
 class LSTMEncoder(FairseqEncoder):
@@ -350,8 +382,7 @@ class LSTMEncoder(FairseqEncoder):
         self,
         src_tokens: Tensor,
         src_lengths: Tensor,
-        enforce_sorted: bool = True,
-        seq_embedding_head = None
+        enforce_sorted: bool = True
     ):
         """
         Args:
@@ -407,15 +438,12 @@ class LSTMEncoder(FairseqEncoder):
 
         encoder_padding_mask = src_tokens.eq(self.padding_idx).t()
 
-        if seq_embedding_head is not None:
-            return seq_embedding_head(x, encoder_padding_mask)
-        else:
-            return tuple((
-                x,  # seq_len x batch x hidden
-                final_hiddens,  # num_layers x batch x num_directions*hidden
-                final_cells,  # num_layers x batch x num_directions*hidden
-                encoder_padding_mask,  # seq_len x batch
-            ))
+        return tuple((
+            x,  # seq_len x batch x hidden
+            final_hiddens,  # num_layers x batch x num_directions*hidden
+            final_cells,  # num_layers x batch x num_directions*hidden
+            encoder_padding_mask,  # seq_len x batch
+        ))
 
     def combine_bidir(self, outs, bsz: int):
         out = outs.view(self.num_layers, 2, bsz, -1).transpose(1, 2).contiguous()
