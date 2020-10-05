@@ -11,7 +11,7 @@ import os
 
 import numpy as np
 
-from fairseq import metrics, options, utils
+from fairseq import metrics, options, utils, checkpoint_utils
 from fairseq.data import (
     AppendTokenDataset,
     ConcatDataset,
@@ -227,8 +227,8 @@ class TranslationWithStyleTask(FairseqTask):
                             help='print sample generations during validation')
 
         # options for style
-        parser.add_argument('--style-embed-path', type=str, metavar='STR', required=True,
-                            help='path to embeddings used for style tokens')
+        parser.add_argument('--style-embed-model', type=str, metavar='STR', required=True,
+                            help='path to model used to generate style embeddings')
         # fmt: on
 
     def __init__(self, args, src_dict, tgt_dict):
@@ -318,6 +318,27 @@ class TranslationWithStyleTask(FairseqTask):
 
             gen_args = json.loads(getattr(args, 'eval_bleu_args', '{}') or '{}')
             self.sequence_generator = self.build_generator([model], Namespace(**gen_args))
+
+        # TODO multiple sequences for style
+        style_checkpoint = checkpoint_utils.load_checkpoint_to_cpu(args.style_embed_model)
+
+        # swapping src and tgt dict as a hack to get the style model to have the embedding size from the target dictionary
+        self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
+        style_model = super().build_model(style_checkpoint['args'])
+        self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
+
+        style_model.set_sequence_embedding_head(getattr(style_checkpoint['args'], 'seq_embedding_reduction'))
+        assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[0] == style_model.encoder.embed_tokens.num_embeddings, \
+            "Style model needs to have the same vocabulary and embedding size"
+        # load weights without classification head that was potentially saved
+        style_model.load_state_dict(style_checkpoint['model'], strict=False)
+
+        # make style model non-trainable
+        for param in style_model.parameters():
+            param.requires_grad = False
+
+        model.set_style_model(style_model)
+
         return model
 
     def valid_step(self, sample, model, criterion):

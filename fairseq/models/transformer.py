@@ -255,6 +255,9 @@ class TransformerModel(FairseqEncoderDecoderModel):
             no_encoder_attn=getattr(args, "no_cross_attention", False),
         )
 
+    def set_style_model(self, model):
+        self.encoder.style_model = model
+
     # TorchScript doesn't support optional arguments with variable length (**kwargs).
     # Current workaround is to add union of all arguments in child classes.
     def forward(
@@ -369,6 +372,8 @@ class TransformerEncoder(FairseqEncoder):
         else:
             self.layer_norm = None
 
+        self.style_model = None
+
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
@@ -376,9 +381,7 @@ class TransformerEncoder(FairseqEncoder):
         if style_tokens is not None:
             style_padding_mask = ~style_tokens.eq(self.padding_idx)
             style_lens = torch.sum(style_padding_mask, dim=1)
-            # average (don't discard duplicate style tokens)
-            style_embed = torch.sum(style_padding_mask[:, :, None] * self.embed_style(style_tokens), dim=1) / \
-                          style_lens[:, None]
+            style_embed = self.style_model(style_tokens, style_lens)
 
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
