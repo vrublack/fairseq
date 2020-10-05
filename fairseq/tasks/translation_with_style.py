@@ -38,7 +38,6 @@ def load_langpair_dataset(
     data_path, split,
     src, src_dict,
     tgt, tgt_dict,
-    style,
     combine, dataset_impl, upsample_primary,
     left_pad_source, left_pad_target, max_source_positions,
     max_target_positions, prepend_bos=False, load_alignments=False,
@@ -57,17 +56,13 @@ def load_langpair_dataset(
 
     for k in itertools.count():
         split_k = split + (str(k) if k > 0 else '')
-        if style:
-            style_k = style + (str(k) if k > 0 else '')
         # infer langcode
         if split_exists(split_k, src, tgt, src, data_path):
             prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, src, tgt))
-            if style:
-                style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(style_k, src, tgt))
+            style_prefix = os.path.join(data_path, '{}-style.{}-{}.'.format(split_k, src, tgt))
         elif split_exists(split_k, tgt, src, src, data_path):
             prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, tgt, src))
-            if style:
-                style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(style_k, tgt, src))
+            style_prefix = os.path.join(data_path, '{}-style.{}-{}.'.format(split_k, tgt, src))
         else:
             if k > 0:
                 break
@@ -89,9 +84,8 @@ def load_langpair_dataset(
         if tgt_dataset is not None:
             tgt_datasets.append(tgt_dataset)
 
-        if style:
-            style_dataset = data_utils.load_indexed_dataset(style_prefix + tgt, tgt_dict, dataset_impl)
-            style_datasets.append(style_dataset)
+        style_dataset = data_utils.load_indexed_dataset(style_prefix + tgt, tgt_dict, dataset_impl)
+        style_datasets.append(style_dataset)
 
         logger.info('{} {} {}-{} {} examples'.format(
             data_path, split_k, src, tgt, len(src_datasets[-1])
@@ -105,7 +99,7 @@ def load_langpair_dataset(
     if len(src_datasets) == 1:
         src_dataset = src_datasets[0]
         tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
-        if style:
+        if style_datasets[0]:
             style_dataset = style_datasets[0]
         else:
             style_dataset = None
@@ -117,7 +111,7 @@ def load_langpair_dataset(
             tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
         else:
             tgt_dataset = None
-        if style:
+        if style_datasets[0]:
             raise NotImplementedError('Styles with multiple datasets not yet implemented')
 
     if prepend_bos:
@@ -138,6 +132,8 @@ def load_langpair_dataset(
         align_path = os.path.join(data_path, '{}.align.{}-{}'.format(split, src, tgt))
         if indexed_dataset.dataset_exists(align_path, impl=dataset_impl):
             align_dataset = data_utils.load_indexed_dataset(align_path, None, dataset_impl)
+
+    assert split == 'train' or style_dataset, 'Style data must be provided for non-train splits'
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
@@ -283,7 +279,6 @@ class TranslationWithStyleTask(FairseqTask):
 
         self.datasets[split] = load_langpair_dataset(
             data_path, split, src, self.src_dict, tgt, self.tgt_dict,
-            kwargs.get('style'),
             combine=combine, dataset_impl=self.args.dataset_impl,
             upsample_primary=self.args.upsample_primary,
             left_pad_source=self.args.left_pad_source,
