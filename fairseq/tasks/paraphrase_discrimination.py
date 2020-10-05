@@ -67,7 +67,6 @@ class ParaphraseDiscriminationTask(FairseqTask):
             filename (str): the filename
         """
         dictionary = Dictionary.load(filename)
-        dictionary.add_symbol('<mask>')
         return dictionary
 
     @classmethod
