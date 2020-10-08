@@ -236,20 +236,26 @@ def main(args):
         else:
             make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers)
 
-    def make_all(lang, vocab, trainpref, validpref, testpref, style=False):
+    def make_all(lang, vocab, trainpref, validpref, testpref):
         if trainpref:
             make_dataset(vocab, trainpref, "train", lang, num_workers=args.workers)
         if validpref:
             for k, validpref in enumerate(validpref.split(",")):
                 outprefix = "valid{}".format(k) if k > 0 else "valid"
-                if style:
-                    outprefix += '-style'
                 make_dataset(vocab, validpref, outprefix, lang, num_workers=args.workers)
         if testpref:
             for k, testpref in enumerate(testpref.split(",")):
                 outprefix = "test{}".format(k) if k > 0 else "test"
-                if style:
-                    outprefix += '-style'
+                make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers)
+
+    def make_all_style(lang, vocab, validpref, testpref):
+        if validpref:
+            for k, validpref in enumerate(validpref.split(",")):
+                outprefix = "valid{}-style".format(k) if k > 0 else "valid-style"
+                make_dataset(vocab, validpref, outprefix, lang, num_workers=args.workers)
+        if testpref:
+            for k, testpref in enumerate(testpref.split(",")):
+                outprefix = "test{}-style".format(k) if k > 0 else "test-style"
                 make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers)
 
     def make_all_alignments():
@@ -263,8 +269,7 @@ def main(args):
     make_all(args.source_lang, src_dict, args.trainpref, args.validpref, args.testpref)
     if target:
         make_all(args.target_lang, tgt_dict, args.trainpref, args.validpref, args.testpref)
-        if args.validpref_style is not None:
-            make_all(args.target_lang, tgt_dict, None, args.validpref_style, args.testpref_style, style=True)
+    make_all_style(args.target_lang, tgt_dict, args.validpref_style, args.testpref_style)
     if args.align_suffix:
         make_all_alignments()
 

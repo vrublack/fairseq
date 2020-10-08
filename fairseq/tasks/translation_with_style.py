@@ -3,116 +3,78 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from argparse import Namespace
-import json
 import itertools
+import json
 import logging
 import os
+from argparse import Namespace
 
 import numpy as np
 
 from fairseq import metrics, options, utils, checkpoint_utils
 from fairseq.data import (
     AppendTokenDataset,
-    ConcatDataset,
     data_utils,
     encoders,
     indexed_dataset,
     LanguagePairDataset,
     PrependTokenDataset,
     StripTokenDataset,
-    TruncateDataset,
+    TruncateDataset, ConcatSentencesDataset,
 )
 from fairseq.models import ARCH_MODEL_REGISTRY
 from fairseq.models.transformer import TransformerModel
-
 from fairseq.tasks import FairseqTask, register_task
 
 EVAL_BLEU_ORDER = 4
 
-
 logger = logging.getLogger(__name__)
 
 
-def load_langpair_dataset(
-    data_path, split,
-    src, src_dict,
-    tgt, tgt_dict,
-    combine, dataset_impl, upsample_primary,
-    left_pad_source, left_pad_target, max_source_positions,
-    max_target_positions, prepend_bos=False, load_alignments=False,
-    truncate_source=False, append_source_id=False,
-    num_buckets=0,
-    shuffle=True
-):
-
+def load_langpair_dataset(data_path, split, src, src_dict, tgt, tgt_dict, dataset_impl, left_pad_source,
+                          left_pad_target, max_source_positions, prepend_bos=False, truncate_source=False,
+                          append_source_id=False, num_buckets=0, shuffle=True):
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, '{}.{}-{}.{}'.format(split, src, tgt, lang))
         return indexed_dataset.dataset_exists(filename, impl=dataset_impl)
 
-    src_datasets = []
-    tgt_datasets = []
     style_datasets = []
 
+    # there can be multiple style datasets, each one adding one more style sequence to each sentence
     for k in itertools.count():
-        split_k = split + (str(k) if k > 0 else '')
+        split_k = split + (str(k) if k > 0 else '') + '-style'
         # infer langcode
-        if split_exists(split_k, src, tgt, src, data_path):
-            prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, src, tgt))
-            style_prefix = os.path.join(data_path, '{}-style.{}-{}.'.format(split_k, src, tgt))
-        elif split_exists(split_k, tgt, src, src, data_path):
-            prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, tgt, src))
-            style_prefix = os.path.join(data_path, '{}-style.{}-{}.'.format(split_k, tgt, src))
+        if split_exists(split_k, src, tgt, tgt, data_path):
+            style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, src, tgt))
+        elif split_exists(split_k, tgt, src, tgt, data_path):
+            style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, tgt, src))
         else:
-            if k > 0:
+            if k > 0 or split == 'train':
                 break
             else:
-                raise FileNotFoundError('Dataset not found: {} ({})'.format(split, data_path))
-
-        src_dataset = data_utils.load_indexed_dataset(prefix + src, src_dict, dataset_impl)
-        if truncate_source:
-            src_dataset = AppendTokenDataset(
-                TruncateDataset(
-                    StripTokenDataset(src_dataset, src_dict.eos()),
-                    max_source_positions - 1,
-                ),
-                src_dict.eos(),
-            )
-        src_datasets.append(src_dataset)
-
-        tgt_dataset = data_utils.load_indexed_dataset(prefix + tgt, tgt_dict, dataset_impl)
-        if tgt_dataset is not None:
-            tgt_datasets.append(tgt_dataset)
+                raise FileNotFoundError('Dataset not found: {} ({})'.format(split_k, data_path))
 
         style_dataset = data_utils.load_indexed_dataset(style_prefix + tgt, tgt_dict, dataset_impl)
         style_datasets.append(style_dataset)
 
-        logger.info('{} {} {}-{} {} examples'.format(
-            data_path, split_k, src, tgt, len(src_datasets[-1])
-        ))
-
-        if not combine:
-            break
-
-    assert len(src_datasets) == len(tgt_datasets) or len(tgt_datasets) == 0
-
-    if len(src_datasets) == 1:
-        src_dataset = src_datasets[0]
-        tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
-        if style_datasets[0]:
-            style_dataset = style_datasets[0]
-        else:
-            style_dataset = None
+    if split_exists(split, src, tgt, src, data_path):
+        prefix = os.path.join(data_path, '{}.{}-{}.'.format(split, src, tgt))
+    elif split_exists(split, tgt, src, src, data_path):
+        prefix = os.path.join(data_path, '{}.{}-{}.'.format(split, tgt, src))
     else:
-        sample_ratios = [1] * len(src_datasets)
-        sample_ratios[0] = upsample_primary
-        src_dataset = ConcatDataset(src_datasets, sample_ratios)
-        if len(tgt_datasets) > 0:
-            tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
-        else:
-            tgt_dataset = None
-        if style_datasets[0]:
-            raise NotImplementedError('Styles with multiple datasets not yet implemented')
+        assert False
+
+    src_dataset = data_utils.load_indexed_dataset(prefix + src, src_dict, dataset_impl)
+    if truncate_source:
+        src_dataset = AppendTokenDataset(
+            TruncateDataset(
+                StripTokenDataset(src_dataset, src_dict.eos()),
+                max_source_positions - 1,
+            ),
+            src_dict.eos(),
+        )
+
+    tgt_dataset = data_utils.load_indexed_dataset(prefix + tgt, tgt_dict, dataset_impl)
 
     if prepend_bos:
         assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
@@ -127,13 +89,12 @@ def load_langpair_dataset(
             tgt_dataset = AppendTokenDataset(tgt_dataset, tgt_dict.index('[{}]'.format(tgt)))
         eos = tgt_dict.index('[{}]'.format(tgt))
 
-    align_dataset = None
-    if load_alignments:
-        align_path = os.path.join(data_path, '{}.align.{}-{}'.format(split, src, tgt))
-        if indexed_dataset.dataset_exists(align_path, impl=dataset_impl):
-            align_dataset = data_utils.load_indexed_dataset(align_path, None, dataset_impl)
+    assert split == 'train' or style_datasets, 'Style data must be provided for non-train splits'
 
-    assert split == 'train' or style_dataset, 'Style data must be provided for non-train splits'
+    if style_datasets:
+        style_datasets = ConcatSentencesDataset(*style_datasets)
+    else:
+        style_datasets = None
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
     return LanguagePairDataset(
@@ -141,10 +102,10 @@ def load_langpair_dataset(
         tgt_dataset, tgt_dataset_sizes, tgt_dict,
         left_pad_source=left_pad_source,
         left_pad_target=left_pad_target,
-        align_dataset=align_dataset, eos=eos,
+        eos=eos,
         num_buckets=num_buckets,
         shuffle=shuffle,
-        style_data=style_dataset,
+        style_data=style_datasets,
         condition_style=True
     )
 
@@ -277,19 +238,13 @@ class TranslationWithStyleTask(FairseqTask):
         # infer langcode
         src, tgt = self.args.source_lang, self.args.target_lang
 
-        self.datasets[split] = load_langpair_dataset(
-            data_path, split, src, self.src_dict, tgt, self.tgt_dict,
-            combine=combine, dataset_impl=self.args.dataset_impl,
-            upsample_primary=self.args.upsample_primary,
-            left_pad_source=self.args.left_pad_source,
-            left_pad_target=self.args.left_pad_target,
-            max_source_positions=self.args.max_source_positions,
-            max_target_positions=self.args.max_target_positions,
-            load_alignments=self.args.load_alignments,
-            truncate_source=self.args.truncate_source,
-            num_buckets=self.args.num_batch_buckets,
-            shuffle=(split != 'test'),
-        )
+        self.datasets[split] = load_langpair_dataset(data_path, split, src, self.src_dict, tgt, self.tgt_dict,
+                                                     dataset_impl=self.args.dataset_impl,
+                                                     left_pad_source=self.args.left_pad_source,
+                                                     left_pad_target=self.args.left_pad_target,
+                                                     max_source_positions=self.args.max_source_positions,
+                                                     truncate_source=self.args.truncate_source,
+                                                     num_buckets=self.args.num_batch_buckets, shuffle=(split != 'test'))
 
     def build_dataset_for_inference(self, src_tokens, src_lengths):
         return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary, condition_style=True)
@@ -323,7 +278,8 @@ class TranslationWithStyleTask(FairseqTask):
         self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
 
         style_model.set_sequence_embedding_head(getattr(style_checkpoint['args'], 'seq_embedding_reduction'))
-        assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[0] == style_model.encoder.embed_tokens.num_embeddings, \
+        assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[
+                   0] == style_model.encoder.embed_tokens.num_embeddings, \
             "Style model needs to have the same vocabulary and embedding size"
         # load weights without classification head that was potentially saved
         style_model.load_state_dict(style_checkpoint['model'], strict=False)
