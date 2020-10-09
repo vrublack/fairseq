@@ -172,6 +172,9 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='block size of quantization noise at training time')
         parser.add_argument('--quant-noise-scalar', type=float, metavar='D', default=0,
                             help='scalar quantization noise and scalar quantization at training time')
+        # style args
+        parser.add_argument('--style-embed-dropout', type=float,
+                            help='Probability of zeroing out the complete style embedding')
         # fmt: on
 
     @classmethod
@@ -330,6 +333,7 @@ class TransformerEncoder(FairseqEncoder):
 
         self.embed_tokens = embed_tokens
         self.embed_style = embed_style
+        self.style_embed_dropout = nn.Dropout(args.style_embed_dropout)
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
 
@@ -387,6 +391,11 @@ class TransformerEncoder(FairseqEncoder):
         embed = self.embed_tokens(src_tokens)
 
         if style_tokens is not None:
+            # randomly zero out the whole style embedding per sample
+            # need the eq(0) because we don't want the dropout scaling
+            whole_sample_dropout_mask = ~self.style_embed_dropout(torch.ones((embed.shape[0], 1))).eq(0)
+            style_embed = style_embed * whole_sample_dropout_mask
+
             # replace first dummy token with style embedding
             embed[:, 0, :] = style_embed
 
@@ -973,6 +982,8 @@ def base_architecture(args):
     args.no_scale_embedding = getattr(args, "no_scale_embedding", False)
     args.layernorm_embedding = getattr(args, "layernorm_embedding", False)
     args.tie_adaptive_weights = getattr(args, "tie_adaptive_weights", False)
+
+    args.style_embed_dropout = getattr(args, "style_embed_dropout", 0.1)
 
 
 @register_model_architecture("transformer", "transformer_iwslt_de_en")
