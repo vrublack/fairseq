@@ -393,7 +393,8 @@ class TransformerEncoder(FairseqEncoder):
         if style_tokens is not None:
             # randomly zero out the whole style embedding per sample
             # need the eq(0) because we don't want the dropout scaling
-            whole_sample_dropout_mask = ~self.style_embed_dropout(torch.ones((embed.shape[0], 1))).eq(0)
+            dummy_ones = style_embed.new_ones((embed.shape[0], 1))
+            whole_sample_dropout_mask = ~self.style_embed_dropout(dummy_ones).eq(0)
             style_embed = style_embed * whole_sample_dropout_mask
 
             # replace first dummy token with style embedding
