@@ -381,37 +381,42 @@ class TransformerEncoder(FairseqEncoder):
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
+    def forward_style_embedding(self, style_tokens):
+        style_padding_mask = ~style_tokens.eq(self.padding_idx)
+        style_lens = torch.sum(style_padding_mask, dim=-1)
+
+        bsize = style_tokens.shape[0]
+        style_n = style_tokens.shape[1]
+
+        # compute only once if all samples have the same style sequences
+        unique_samples = torch.unique_consecutive(style_tokens, dim=0)
+        computed_style_shortcut = unique_samples.shape[0] == 1
+        if computed_style_shortcut:
+            style_tokens = unique_samples
+            style_lens = style_lens[0].unsqueeze(0)
+
+        style_embed = []
+        for i in range(style_n):
+            sample_max_style_lens = max(style_lens[:, i])
+            style_embed.append(self.style_model(style_tokens[:, i, :sample_max_style_lens], style_lens[:, i]))
+        style_embed = torch.mean(torch.stack(style_embed), dim=0)
+
+        if computed_style_shortcut:
+            style_embed = style_embed.repeat(bsize, 1)
+
+        # randomly zero out the whole style embedding per sample
+        # need the eq(0) because we don't want the dropout scaling
+        dummy_ones = style_embed.new_ones((bsize, 1))
+        whole_sample_dropout_mask = ~self.style_embed_dropout(dummy_ones).eq(0)
+        return style_embed * whole_sample_dropout_mask
+
     def forward_embedding(self, src_tokens, style_tokens):
-        if style_tokens is not None:
-            style_padding_mask = ~style_tokens.eq(self.padding_idx)
-            style_lens = torch.sum(style_padding_mask, dim=-1)
-            style_n = style_tokens.shape[1]
-
-            # compute only once if all samples have the same style sequences
-            unique_samples = torch.unique_consecutive(style_tokens, dim=0)
-            computed_style_shortcut = unique_samples.shape[0] == 1
-            if computed_style_shortcut:
-                style_tokens = unique_samples
-                style_lens = style_lens[0].unsqueeze(0)
-
-            style_embed = [self.style_model(style_tokens[:,i,:max(style_lens[:,i])], style_lens[:,i]) for i in range(style_n)]
-            style_embed = torch.mean(torch.stack(style_embed), dim=0)
-
-            if computed_style_shortcut:
-                style_embed = style_embed.repeat(src_tokens.shape[0], 1)
-
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
 
         if style_tokens is not None:
-            # randomly zero out the whole style embedding per sample
-            # need the eq(0) because we don't want the dropout scaling
-            dummy_ones = style_embed.new_ones((embed.shape[0], 1))
-            whole_sample_dropout_mask = ~self.style_embed_dropout(dummy_ones).eq(0)
-            style_embed = style_embed * whole_sample_dropout_mask
-
             # replace first dummy token with style embedding
-            embed[:, 0, :] = style_embed
+            embed[:, 0, :] = self.forward_style_embedding(style_tokens)
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
