@@ -20,8 +20,10 @@ from fairseq.data import (
     LanguagePairDataset,
     PrependTokenDataset,
     StripTokenDataset,
-    TruncateDataset, ConcatSentencesDataset,
+    TruncateDataset,
 )
+from fairseq.data.lengthen_dataset import LengthenDataset
+from fairseq.data.stack_sentences_dataset import StackSentencesDataset
 from fairseq.models import ARCH_MODEL_REGISTRY
 from fairseq.models.transformer import TransformerModel
 from fairseq.tasks import FairseqTask, register_task
@@ -92,7 +94,10 @@ def load_langpair_dataset(data_path, split, src, src_dict, tgt, tgt_dict, datase
     assert split == 'train' or style_datasets, 'Style data must be provided for non-train splits'
 
     if style_datasets:
-        style_datasets = ConcatSentencesDataset(*style_datasets)
+        style_datasets = StackSentencesDataset(tgt_dict.pad(), *style_datasets)
+        # allow only a single style sequence to be passed if it is the same for every sample
+        if len(style_datasets) == 1:
+            style_datasets = LengthenDataset(style_datasets, len(src_dataset))
     else:
         style_datasets = None
 

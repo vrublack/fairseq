@@ -102,7 +102,7 @@ def collate(
         style_tokens = style_tokens.index_select(0, sort_order)
     elif condition_style:
         # net learns to produce target from target style tokens
-        style_tokens = target
+        style_tokens = target.unsqueeze(1)
     else:
         style_tokens = None
 

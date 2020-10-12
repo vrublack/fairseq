@@ -34,6 +34,9 @@ def infer_language_pair(path):
 
 def collate_tokens(values, pad_idx, eos_idx=None, left_pad=False, move_eos_to_beginning=False, pad_to_length=None):
     """Convert a list of 1d tensors into a padded 2d tensor."""
+    if len(values[0].shape) > 1:
+        return collate_tokens_multidim(values, pad_idx, eos_idx, left_pad, move_eos_to_beginning, pad_to_length)
+
     size = max(v.size(0) for v in values)
     size = size if pad_to_length is None else max(size, pad_to_length)
     res = values[0].new(len(values), size).fill_(pad_idx)
@@ -53,6 +56,33 @@ def collate_tokens(values, pad_idx, eos_idx=None, left_pad=False, move_eos_to_be
     for i, v in enumerate(values):
         copy_tensor(v, res[i][size - len(v):] if left_pad else res[i][:len(v)])
     return res
+
+
+def collate_tokens_multidim(values, pad_idx, eos_idx=None, left_pad=False, move_eos_to_beginning=False, pad_to_length=None):
+    """Convert a list of 1d tensors into a padded 2d tensor."""
+    n_dims = len(values[0].shape)
+
+    assert n_dims > 1
+    if move_eos_to_beginning or pad_to_length or left_pad:
+        raise NotImplementedError
+
+    assert len(set(len(value.shape) for value in values)) == 1, 'Tensors must have same number of dimensions'
+
+    max_sizes = []
+    for dim in range(n_dims):
+        max_sizes.append(max(map(lambda value: value.shape[dim], values)))
+
+    padded_values = []
+    for i, v in enumerate(values):
+        # add padding in the back for every dimension
+        padding_n = []
+        for dim in range(n_dims - 1, -1, -1):
+            padding_n.append(0)
+            padding_n.append(max_sizes[dim] - v.shape[dim])
+
+        padded_values.append(torch.nn.functional.pad(v, padding_n, value=pad_idx))
+
+    return torch.stack(padded_values)
 
 
 def load_indexed_dataset(path, dictionary=None, dataset_impl=None, combine=False, default='cached'):

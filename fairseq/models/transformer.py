@@ -384,8 +384,10 @@ class TransformerEncoder(FairseqEncoder):
     def forward_embedding(self, src_tokens, style_tokens):
         if style_tokens is not None:
             style_padding_mask = ~style_tokens.eq(self.padding_idx)
-            style_lens = torch.sum(style_padding_mask, dim=1)
-            style_embed = self.style_model(style_tokens, style_lens)
+            style_lens = torch.sum(style_padding_mask, dim=-1)
+            style_n = style_tokens.shape[1]
+            style_embed = [self.style_model(style_tokens[:,i,:max(style_lens[:,i])], style_lens[:,i]) for i in range(style_n)]
+            style_embed = torch.mean(torch.stack(style_embed), dim=0)
 
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
