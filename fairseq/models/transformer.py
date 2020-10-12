@@ -386,8 +386,19 @@ class TransformerEncoder(FairseqEncoder):
             style_padding_mask = ~style_tokens.eq(self.padding_idx)
             style_lens = torch.sum(style_padding_mask, dim=-1)
             style_n = style_tokens.shape[1]
+
+            # compute only once if all samples have the same style sequences
+            unique_samples = torch.unique_consecutive(style_tokens, dim=0)
+            computed_style_shortcut = unique_samples.shape[0] == 1
+            if computed_style_shortcut:
+                style_tokens = unique_samples
+                style_lens = style_lens[0].unsqueeze(0)
+
             style_embed = [self.style_model(style_tokens[:,i,:max(style_lens[:,i])], style_lens[:,i]) for i in range(style_n)]
             style_embed = torch.mean(torch.stack(style_embed), dim=0)
+
+            if computed_style_shortcut:
+                style_embed = style_embed.repeat(src_tokens.shape[0], 1)
 
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
