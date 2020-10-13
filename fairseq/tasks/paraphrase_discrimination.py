@@ -51,7 +51,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
         parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
-                            help='How to combine the seq length dimension of the lstm output')
+                            help='How to combine the seq length dimension of the model output')
 
     def __init__(self, args, dictionary):
         super().__init__(args)
@@ -184,7 +184,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
     def build_model(self, args):
         from fairseq import models
 
-        assert args.arch == 'lstm_encoder'
+        assert args.arch in ('lstm_encoder', 'bow_encoder')
 
         model = models.build_model(args, self)
 
