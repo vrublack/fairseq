@@ -281,6 +281,11 @@ class TransformerModel(FairseqEncoderDecoderModel):
         which are not supported by TorchScript.
         """
 
+        # add dummy src token (just take 1st sequence token) for style embedding
+        if style_tokens is not None:
+            src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
+            src_lengths = src_lengths.add(1)
+
         encoder_out = self.encoder(
             src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens
         )
@@ -450,10 +455,6 @@ class TransformerEncoder(FairseqEncoder):
                   hidden states of shape `(src_len, batch, embed_dim)`.
                   Only populated if *return_all_hiddens* is True.
         """
-
-        # add dummy src token (just take 1st sequence token) for style embedding
-        if style_tokens is not None:
-            src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
 
         x, encoder_embedding = self.forward_embedding(src_tokens, style_tokens)
 
