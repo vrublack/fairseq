@@ -175,6 +175,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         # style args
         parser.add_argument('--style-embed-dropout', type=float,
                             help='Probability of zeroing out the complete style embedding')
+        parser.add_argument('--style-embed-noise-stddev', type=float, default=0,
+                            help='Standard deviation of noise added to the style embedding (with zero mean)')
         # fmt: on
 
     @classmethod
@@ -339,6 +341,7 @@ class TransformerEncoder(FairseqEncoder):
         self.embed_tokens = embed_tokens
         self.embed_style = embed_style
         self.style_embed_dropout = nn.Dropout(args.style_embed_dropout)
+        self.style_embed_noise_stddev = args.style_embed_noise_stddev
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
 
@@ -413,6 +416,12 @@ class TransformerEncoder(FairseqEncoder):
         # need the eq(0) because we don't want the dropout scaling
         dummy_ones = style_embed.new_ones((bsize, 1))
         whole_sample_dropout_mask = ~self.style_embed_dropout(dummy_ones).eq(0)
+
+        if self.style_embed_noise_stddev:
+            noise = style_embed.new(style_embed.shape)
+            torch.randn(noise.shape, out=noise)
+            style_embed += noise * self.style_embed_noise_stddev
+
         return style_embed * whole_sample_dropout_mask
 
     def forward_embedding(self, src_tokens, style_tokens):
