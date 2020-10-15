@@ -417,7 +417,7 @@ class TransformerEncoder(FairseqEncoder):
         dummy_ones = style_embed.new_ones((bsize, 1))
         whole_sample_dropout_mask = ~self.style_embed_dropout(dummy_ones).eq(0)
 
-        if self.style_embed_noise_stddev:
+        if self.style_embed_noise_stddev and self.training:
             noise = style_embed.new(style_embed.shape)
             torch.randn(noise.shape, out=noise)
             style_embed += noise * self.style_embed_noise_stddev
