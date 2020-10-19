@@ -283,9 +283,11 @@ class TransformerModel(FairseqEncoderDecoderModel):
         which are not supported by TorchScript.
         """
 
-        # add dummy src token (just take 1st sequence token) for style embedding
         if style_tokens is not None:
-            src_tokens = torch.cat([src_tokens[:, 0].unsqueeze(1), src_tokens], dim=1)
+            # add dummy src token (just take last sequence token) for style embedding
+            assert not src_tokens[:, -1].eq(self.decoder.dictionary.pad()).any(), \
+                "Only accepts padding on the left side"
+            src_tokens = torch.cat([src_tokens, src_tokens[:, -1].unsqueeze(1)], dim=1)
             src_lengths = src_lengths.add(1)
 
         encoder_out = self.encoder(
@@ -429,8 +431,8 @@ class TransformerEncoder(FairseqEncoder):
         embed = self.embed_tokens(src_tokens)
 
         if style_tokens is not None:
-            # replace first dummy token with style embedding
-            embed[:, 0, :] = self.forward_style_embedding(style_tokens)
+            # replace last dummy token with style embedding
+            embed[:, -1, :] = self.forward_style_embedding(style_tokens)
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
