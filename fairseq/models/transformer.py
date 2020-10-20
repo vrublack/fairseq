@@ -432,7 +432,14 @@ class TransformerEncoder(FairseqEncoder):
 
         if style_tokens is not None:
             # replace last dummy token with style embedding
-            embed[:, -1, :] = self.forward_style_embedding(style_tokens)
+            style_emb = self.forward_style_embedding(style_tokens)
+            if style_emb.shape[1] < embed.shape[2]:
+                # pad style embedding with zeros if the size is smaller
+                style_embed_pad = style_emb.new_zeros(size=(embed.shape[0], embed.shape[2]))
+                style_embed_pad[:, :style_emb.shape[1]] = style_emb
+                style_emb = style_embed_pad
+
+            embed[:, -1, :] = style_emb
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
