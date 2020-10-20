@@ -289,8 +289,14 @@ class TransformerModel(FairseqEncoderDecoderModel):
             # add dummy src token (just take last sequence token) for style embedding
             assert not src_tokens[:, -1].eq(self.decoder.dictionary.pad()).any(), \
                 "Only accepts padding on the left side"
-            src_tokens = torch.cat([src_tokens, src_tokens[:, -1].unsqueeze(1)], dim=1)
+            dummy_tokens = src_tokens.new(size=(src_tokens.shape[0], 1))
+            dummy_tokens.fill_(self.decoder.dictionary.pad())
+            src_tokens = torch.cat([dummy_tokens, src_tokens], dim=1)
             src_lengths = src_lengths.add(1)
+
+            # TODO vectorize
+            for b in range(src_tokens.shape[0]):
+                src_tokens[b, src_tokens.shape[1] - src_lengths[b]] = self.decoder.dictionary.unk()
 
         encoder_out = self.encoder(
             src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens
@@ -430,7 +436,7 @@ class TransformerEncoder(FairseqEncoder):
 
         return style_embed * whole_sample_dropout_mask
 
-    def forward_embedding(self, src_tokens, style_tokens):
+    def forward_embedding(self, src_tokens, src_lengths, style_tokens):
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
 
@@ -443,7 +449,9 @@ class TransformerEncoder(FairseqEncoder):
                 style_embed_pad[:, :style_emb.shape[1]] = style_emb
                 style_emb = style_embed_pad
 
-            embed[:, -1, :] = style_emb
+            # TODO vectorize, using select somehow? How to select whole dimension k?
+            for b in range(embed.shape[0]):
+                embed[b, embed.shape[1] - src_lengths[b]] = style_emb[b]
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
@@ -478,7 +486,7 @@ class TransformerEncoder(FairseqEncoder):
                   Only populated if *return_all_hiddens* is True.
         """
 
-        x, encoder_embedding = self.forward_embedding(src_tokens, style_tokens)
+        x, encoder_embedding = self.forward_embedding(src_tokens, src_lengths, style_tokens)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
