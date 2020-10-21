@@ -179,6 +179,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='If the style embedding dropout should also be applied during inference')
         parser.add_argument('--style-embed-noise-stddev', type=float, default=0,
                             help='Standard deviation of noise added to the style embedding (with zero mean)')
+        parser.add_argument('--style-embed-position', type=str, default='encoder', choices=['encoder', 'decoder'],
+                            help='Concatenate style embeddings to encoder embeddings (encoder) or to encoder output (decoder)')
         # fmt: on
 
     @classmethod
@@ -285,17 +287,6 @@ class TransformerModel(FairseqEncoderDecoderModel):
         which are not supported by TorchScript.
         """
 
-        if style_tokens is not None:
-            # add dummy src token (just take last sequence token) for style embedding
-            assert not src_tokens[:, -1].eq(self.decoder.dictionary.pad()).any(), \
-                "Only accepts padding on the left side"
-            dummy_tokens = src_tokens.new(size=(src_tokens.shape[0], 1))
-            dummy_tokens.fill_(self.decoder.dictionary.pad())
-            src_tokens = torch.cat([dummy_tokens, src_tokens], dim=1)
-            src_lengths = src_lengths.add(1)
-            # put the dummy token right before the real sequence starts for each sample
-            src_tokens.scatter_(1, (src_tokens.shape[1] - src_lengths).unsqueeze(1), self.decoder.dictionary.unk())
-
         encoder_out = self.encoder(
             src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens
         )
@@ -305,7 +296,7 @@ class TransformerModel(FairseqEncoderDecoderModel):
             features_only=features_only,
             alignment_layer=alignment_layer,
             alignment_heads=alignment_heads,
-            src_lengths=src_lengths,
+            src_lengths=None,
             return_all_hiddens=return_all_hiddens,
         )
         return decoder_out
@@ -398,10 +389,13 @@ class TransformerEncoder(FairseqEncoder):
 
         self.tgt_dict = tgt_dict
 
+        self.style_embed_position = args.style_embed_position
+
+
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
-    def forward_style_embedding(self, style_tokens):
+    def forward_style_embedding(self, style_tokens, out_dim):
         bsize, style_n, style_seq_len = style_tokens.shape
 
         # randomly assign empty style sequence to all style sequences of a sample
@@ -440,23 +434,35 @@ class TransformerEncoder(FairseqEncoder):
             torch.randn(noise.shape, out=noise)
             style_embed += noise * self.style_embed_noise_stddev
 
+        if style_embed.shape[1] < out_dim:
+            # pad style embedding with zeros if the size is smaller
+            # TODO this might be problematic, could be solved better with a linear layer
+            style_embed_pad = style_embed.new_zeros(size=(style_embed.shape[0], out_dim))
+            style_embed_pad[:, :style_embed.shape[1]] = style_embed
+            style_embed = style_embed_pad
+
         return style_embed
+
+    def _replace_at_seq_beginning(self, embed, lengths, src):
+        scatter_index = (embed.shape[1] - lengths).view(-1, 1, 1).expand(-1, -1, embed.shape[2])
+        embed.scatter_(1, scatter_index, src.unsqueeze(1))
+
+    def _insert_token_at_seq_beginning(self, tokens, new_lengths, fill_val, seq_beginning_val):
+        dummy_tokens = tokens.new(size=(tokens.shape[0], 1))
+        dummy_tokens.fill_(fill_val)
+        tokens = torch.cat([dummy_tokens, tokens], dim=1)
+        # put the dummy token right before the real sequence starts for each sample
+        tokens.scatter_(1, (tokens.shape[1] - new_lengths).unsqueeze(1), seq_beginning_val)
+        return tokens
 
     def forward_embedding(self, src_tokens, src_lengths, style_tokens):
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
 
-        if style_tokens is not None:
-            # replace last dummy token with style embedding
-            style_emb = self.forward_style_embedding(style_tokens)
-            if style_emb.shape[1] < embed.shape[2]:
-                # pad style embedding with zeros if the size is smaller
-                style_embed_pad = style_emb.new_zeros(size=(embed.shape[0], embed.shape[2]))
-                style_embed_pad[:, :style_emb.shape[1]] = style_emb
-                style_emb = style_embed_pad
-
-            scatter_index = (embed.shape[1] - src_lengths).view(-1, 1, 1).expand(-1, -1, embed.shape[2])
-            embed.scatter_(1, scatter_index, style_emb.unsqueeze(1))
+        if style_tokens is not None and self.style_embed_position == 'encoder':
+            # replace dummy token with style embedding
+            style_emb = self.forward_style_embedding(style_tokens, embed.shape[2])
+            self._replace_at_seq_beginning(embed, src_lengths, style_emb)
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
@@ -491,6 +497,15 @@ class TransformerEncoder(FairseqEncoder):
                   Only populated if *return_all_hiddens* is True.
         """
 
+        if style_tokens is not None and self.style_embed_position == 'encoder':
+            # add dummy src token (just take last sequence token) for style embedding
+            assert not src_tokens[:, -1].eq(self.tgt_dict.pad()).any(), \
+                "Only accepts padding on the left side"
+            src_lengths = src_lengths.add(1)
+            src_tokens = self._insert_token_at_seq_beginning(src_tokens, src_lengths, self.tgt_dict.pad(),
+                                                             self.tgt_dict.unk())
+
+
         x, encoder_embedding = self.forward_embedding(src_tokens, src_lengths, style_tokens)
 
         # B x T x C -> T x B x C
@@ -510,6 +525,20 @@ class TransformerEncoder(FairseqEncoder):
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
+
+        if style_tokens is not None and self.style_embed_position == 'decoder':
+            assert not src_tokens[:, -1].eq(self.tgt_dict.pad()).any(), \
+                "Only accepts padding on the left side"
+
+            src_lengths = src_lengths.add(1)
+            style_emb = self.forward_style_embedding(style_tokens, x.shape[2])
+            x = torch.cat([x[0].unsqueeze(0), x], dim=0)
+
+            x.transpose_(0, 1)
+            self._replace_at_seq_beginning(x, src_lengths, style_emb)
+            x.transpose_(0, 1)
+            # need to remove mask at style embedding positions
+            encoder_padding_mask = self._insert_token_at_seq_beginning(encoder_padding_mask, src_lengths, True, False)
 
         return EncoderOut(
             encoder_out=x,  # T x B x C
