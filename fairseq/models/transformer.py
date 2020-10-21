@@ -27,6 +27,7 @@ from fairseq.modules import (
     TransformerDecoderLayer,
     TransformerEncoderLayer,
 )
+from fairseq.modules.layer_norm import TiedLayerNorm
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
 from torch import Tensor
 
@@ -181,6 +182,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='Standard deviation of noise added to the style embedding (with zero mean)')
         parser.add_argument('--style-embed-position', type=str, default='encoder', choices=['encoder', 'decoder'],
                             help='Concatenate style embeddings to encoder embeddings (encoder) or to encoder output (decoder)')
+        parser.add_argument('--layernorm-style-embed', action='store_true', default=False,
+                            help='Apply layer normalization to style embeddings')
         # fmt: on
 
     @classmethod
@@ -228,14 +231,7 @@ class TransformerModel(FairseqEncoderDecoderModel):
                 args, tgt_dict, args.decoder_embed_dim, args.decoder_embed_path
             )
 
-        if hasattr(args, 'style_embed_path'):
-            style_embed = cls.build_embedding(
-                args, src_dict, args.encoder_embed_dim, args.style_embed_path
-            )
-        else:
-            style_embed = None
-
-        encoder = cls.build_encoder(args, src_dict, tgt_dict, encoder_embed_tokens, style_embed)
+        encoder = cls.build_encoder(args, src_dict, tgt_dict, encoder_embed_tokens)
         decoder = cls.build_decoder(args, tgt_dict, decoder_embed_tokens)
         return cls(args, encoder, decoder)
 
@@ -252,8 +248,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         return emb
 
     @classmethod
-    def build_encoder(cls, args, src_dict, tgt_dict, embed_tokens, style_embed):
-        return TransformerEncoder(args, src_dict, tgt_dict, embed_tokens, style_embed)
+    def build_encoder(cls, args, src_dict, tgt_dict, embed_tokens):
+        return TransformerEncoder(args, src_dict, tgt_dict, embed_tokens)
 
     @classmethod
     def build_decoder(cls, args, tgt_dict, embed_tokens):
@@ -326,7 +322,7 @@ class TransformerEncoder(FairseqEncoder):
         embed_tokens (torch.nn.Embedding): input embedding
     """
 
-    def __init__(self, args, dictionary, tgt_dict, embed_tokens: nn.Embedding, embed_style: nn.Embedding):
+    def __init__(self, args, dictionary, tgt_dict, embed_tokens: nn.Embedding):
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
 
@@ -338,7 +334,6 @@ class TransformerEncoder(FairseqEncoder):
         self.max_source_positions = args.max_source_positions
 
         self.embed_tokens = embed_tokens
-        self.embed_style = embed_style
         self.style_embed_dropout = FairseqDropout(args.style_embed_dropout)
         if args.style_embed_dropout_inference:
             self.style_embed_dropout.apply_during_inference = True
@@ -385,6 +380,11 @@ class TransformerEncoder(FairseqEncoder):
         else:
             self.layer_norm = None
 
+        if args.layernorm_style_embed:
+            self.style_embed_norm = TiedLayerNorm()
+        else:
+            self.style_embed_norm = None
+
         self.style_model = None
 
         self.tgt_dict = tgt_dict
@@ -395,7 +395,7 @@ class TransformerEncoder(FairseqEncoder):
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
-    def forward_style_embedding(self, style_tokens, out_dim):
+    def forward_style_embedding(self, style_tokens, out_dim, other_emb):
         bsize, style_n, style_seq_len = style_tokens.shape
 
         # randomly assign empty style sequence to all style sequences of a sample
@@ -429,10 +429,9 @@ class TransformerEncoder(FairseqEncoder):
         if computed_style_shortcut:
             style_embed = style_embed.repeat(bsize, 1)
 
-        if self.style_embed_noise_stddev and self.training:
-            noise = style_embed.new(style_embed.shape)
-            torch.randn(noise.shape, out=noise)
-            style_embed += noise * self.style_embed_noise_stddev
+        if self.style_embed_norm is not None:
+            # TODO masking with other_emb
+            style_embed = self.style_embed_norm(style_embed, other_emb)
 
         if style_embed.shape[1] < out_dim:
             # pad style embedding with zeros if the size is smaller
@@ -440,6 +439,11 @@ class TransformerEncoder(FairseqEncoder):
             style_embed_pad = style_embed.new_zeros(size=(style_embed.shape[0], out_dim))
             style_embed_pad[:, :style_embed.shape[1]] = style_embed
             style_embed = style_embed_pad
+
+        if self.style_embed_noise_stddev and self.training:
+            noise = style_embed.new(style_embed.shape)
+            torch.randn(noise.shape, out=noise)
+            style_embed += noise * self.style_embed_noise_stddev
 
         return style_embed
 
@@ -461,7 +465,7 @@ class TransformerEncoder(FairseqEncoder):
 
         if style_tokens is not None and self.style_embed_position == 'encoder':
             # replace dummy token with style embedding
-            style_emb = self.forward_style_embedding(style_tokens, embed.shape[2])
+            style_emb = self.forward_style_embedding(style_tokens, embed.shape[2], embed)
             self._replace_at_seq_beginning(embed, src_lengths, style_emb)
 
         x = embed = self.embed_scale * embed
@@ -531,7 +535,7 @@ class TransformerEncoder(FairseqEncoder):
                 "Only accepts padding on the left side"
 
             src_lengths = src_lengths.add(1)
-            style_emb = self.forward_style_embedding(style_tokens, x.shape[2])
+            style_emb = self.forward_style_embedding(style_tokens, x.shape[2], x)
             x = torch.cat([x[0].unsqueeze(0), x], dim=0)
 
             x.transpose_(0, 1)
