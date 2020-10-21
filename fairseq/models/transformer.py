@@ -293,10 +293,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
             dummy_tokens.fill_(self.decoder.dictionary.pad())
             src_tokens = torch.cat([dummy_tokens, src_tokens], dim=1)
             src_lengths = src_lengths.add(1)
-
-            # TODO vectorize
-            for b in range(src_tokens.shape[0]):
-                src_tokens[b, src_tokens.shape[1] - src_lengths[b]] = self.decoder.dictionary.unk()
+            # put the dummy token right before the real sequence starts for each sample
+            src_tokens.scatter_(1, (src_tokens.shape[1] - src_lengths).unsqueeze(1), self.decoder.dictionary.unk())
 
         encoder_out = self.encoder(
             src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens
@@ -449,9 +447,8 @@ class TransformerEncoder(FairseqEncoder):
                 style_embed_pad[:, :style_emb.shape[1]] = style_emb
                 style_emb = style_embed_pad
 
-            # TODO vectorize, using select somehow? How to select whole dimension k?
-            for b in range(embed.shape[0]):
-                embed[b, embed.shape[1] - src_lengths[b]] = style_emb[b]
+            scatter_index = (embed.shape[1] - src_lengths).view(-1, 1, 1).expand(-1, -1, embed.shape[2])
+            embed.scatter_(1, scatter_index, style_emb.unsqueeze(1))
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
