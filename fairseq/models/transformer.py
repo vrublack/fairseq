@@ -233,7 +233,7 @@ class TransformerModel(FairseqEncoderDecoderModel):
         else:
             style_embed = None
 
-        encoder = cls.build_encoder(args, src_dict, encoder_embed_tokens, style_embed)
+        encoder = cls.build_encoder(args, src_dict, tgt_dict, encoder_embed_tokens, style_embed)
         decoder = cls.build_decoder(args, tgt_dict, decoder_embed_tokens)
         return cls(args, encoder, decoder)
 
@@ -250,8 +250,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         return emb
 
     @classmethod
-    def build_encoder(cls, args, src_dict, embed_tokens, style_embed):
-        return TransformerEncoder(args, src_dict, embed_tokens, style_embed)
+    def build_encoder(cls, args, src_dict, tgt_dict, embed_tokens, style_embed):
+        return TransformerEncoder(args, src_dict, tgt_dict, embed_tokens, style_embed)
 
     @classmethod
     def build_decoder(cls, args, tgt_dict, embed_tokens):
@@ -335,7 +335,7 @@ class TransformerEncoder(FairseqEncoder):
         embed_tokens (torch.nn.Embedding): input embedding
     """
 
-    def __init__(self, args, dictionary, embed_tokens: nn.Embedding, embed_style: nn.Embedding):
+    def __init__(self, args, dictionary, tgt_dict, embed_tokens: nn.Embedding, embed_style: nn.Embedding):
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
 
@@ -396,15 +396,25 @@ class TransformerEncoder(FairseqEncoder):
 
         self.style_model = None
 
+        self.tgt_dict = tgt_dict
+
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
     def forward_style_embedding(self, style_tokens):
-        style_padding_mask = ~style_tokens.eq(self.padding_idx)
-        style_lens = torch.sum(style_padding_mask, dim=-1)
+        bsize, style_n, style_seq_len = style_tokens.shape
 
-        bsize = style_tokens.shape[0]
-        style_n = style_tokens.shape[1]
+        # randomly assign empty style sequence to all style sequences of a sample
+        # if dropout it active during inference, computed_style_shortcut can't be done any more, but dropout during
+        # inference is only for debugging/baseline so it's fine
+        dummy_ones = style_tokens.new_ones((bsize, 1), dtype=torch.float32)
+        whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
+        empty_seq = style_tokens.new_tensor([self.tgt_dict.eos()] + [self.tgt_dict.pad()] * (style_seq_len - 1))
+        style_tokens = style_tokens.masked_scatter(whole_sample_dropout_mask.unsqueeze(2).expand(-1, style_n, style_seq_len),
+                                    empty_seq.view(1, 1, -1).expand(bsize, style_n, -1))
+
+        style_padding_mask = ~style_tokens.eq(self.tgt_dict.pad())
+        style_lens = torch.sum(style_padding_mask, dim=-1)
 
         # compute only once if all samples have the same style sequences
         unique_samples = torch.unique_consecutive(style_tokens, dim=0)
@@ -412,6 +422,9 @@ class TransformerEncoder(FairseqEncoder):
         if computed_style_shortcut:
             style_tokens = unique_samples
             style_lens = style_lens[0].unsqueeze(0)
+
+        assert not style_tokens[:, 0, 0].eq(self.tgt_dict.pad()).any(), \
+            "Only accepts padding on the right side for style tokens"
 
         style_embed = []
         for i in range(style_n):
@@ -422,17 +435,12 @@ class TransformerEncoder(FairseqEncoder):
         if computed_style_shortcut:
             style_embed = style_embed.repeat(bsize, 1)
 
-        # randomly zero out the whole style embedding per sample
-        # need the eq(0) because we don't want the dropout scaling
-        dummy_ones = style_embed.new_ones((bsize, 1))
-        whole_sample_dropout_mask = ~self.style_embed_dropout(dummy_ones).eq(0)
-
         if self.style_embed_noise_stddev and self.training:
             noise = style_embed.new(style_embed.shape)
             torch.randn(noise.shape, out=noise)
             style_embed += noise * self.style_embed_noise_stddev
 
-        return style_embed * whole_sample_dropout_mask
+        return style_embed
 
     def forward_embedding(self, src_tokens, src_lengths, style_tokens):
         # embed tokens and positions
