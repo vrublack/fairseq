@@ -126,6 +126,7 @@ class BOWEncoder(FairseqEncoder):
         self.dropout_module = FairseqDropout(dropout, module_name=self.__class__.__name__)
         self.embed_tokens = embed
         self.padding_idx = dictionary.pad()
+        self.hidden_size = embed.embedding_dim
 
     def forward(
             self,

@@ -260,8 +260,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
             no_encoder_attn=getattr(args, "no_cross_attention", False),
         )
 
-    def set_style_model(self, model):
-        self.encoder.style_model = model
+    def set_style_model(self, model, style_embed_dim):
+        self.encoder.set_style_model(model, style_embed_dim)
 
     # TorchScript doesn't support optional arguments with variable length (**kwargs).
     # Current workaround is to add union of all arguments in child classes.
@@ -329,7 +329,7 @@ class TransformerEncoder(FairseqEncoder):
         self.dropout_module = FairseqDropout(args.dropout, module_name=self.__class__.__name__)
         self.encoder_layerdrop = args.encoder_layerdrop
 
-        embed_dim = embed_tokens.embedding_dim
+        self.embed_dim = embed_tokens.embedding_dim
         self.padding_idx = embed_tokens.padding_idx
         self.max_source_positions = args.max_source_positions
 
@@ -339,12 +339,12 @@ class TransformerEncoder(FairseqEncoder):
             self.style_embed_dropout.apply_during_inference = True
         self.style_embed_noise_stddev = args.style_embed_noise_stddev
 
-        self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
+        self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(self.embed_dim)
 
         self.embed_positions = (
             PositionalEmbedding(
                 args.max_source_positions,
-                embed_dim,
+                self.embed_dim,
                 self.padding_idx,
                 learned=args.encoder_learned_pos,
             )
@@ -353,13 +353,13 @@ class TransformerEncoder(FairseqEncoder):
         )
 
         if getattr(args, "layernorm_embedding", False):
-            self.layernorm_embedding = LayerNorm(embed_dim)
+            self.layernorm_embedding = LayerNorm(self.embed_dim)
         else:
             self.layernorm_embedding = None
 
         if not args.adaptive_input and args.quant_noise_pq > 0:
             self.quant_noise = apply_quant_noise_(
-                nn.Linear(embed_dim, embed_dim, bias=False),
+                nn.Linear(self.embed_dim, self.embed_dim, bias=False),
                 args.quant_noise_pq,
                 args.quant_noise_pq_block_size,
             )
@@ -376,7 +376,7 @@ class TransformerEncoder(FairseqEncoder):
         self.num_layers = len(self.layers)
 
         if args.encoder_normalize_before:
-            self.layer_norm = LayerNorm(embed_dim)
+            self.layer_norm = LayerNorm(self.embed_dim)
         else:
             self.layer_norm = None
 
@@ -386,11 +386,15 @@ class TransformerEncoder(FairseqEncoder):
             self.style_embed_norm = None
 
         self.style_model = None
+        self.style_model_out_proj = None
 
         self.tgt_dict = tgt_dict
 
         self.style_embed_position = args.style_embed_position
 
+    def set_style_model(self, model, style_embed_dim):
+        self.style_model = model
+        self.style_model_out_proj = nn.Linear(style_embed_dim, self.embed_dim)
 
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
@@ -430,21 +434,15 @@ class TransformerEncoder(FairseqEncoder):
             style_embed = style_embed.repeat(bsize, 1)
 
         if self.style_embed_norm is not None:
-            # TODO masking with other_emb
             style_embed = self.style_embed_norm(style_embed, other_emb)
-
-        if style_embed.shape[1] < out_dim:
-            # pad style embedding with zeros if the size is smaller
-            # TODO this might be problematic, could be solved better with a linear layer
-            style_embed_pad = style_embed.new_zeros(size=(style_embed.shape[0], out_dim))
-            style_embed_pad[:, :style_embed.shape[1]] = style_embed
-            style_embed = style_embed_pad
 
         if self.style_embed_noise_stddev and self.training:
             noise = style_embed.new(style_embed.shape)
             torch.randn(noise.shape, out=noise)
             style_embed += noise * self.style_embed_noise_stddev
-
+        
+        style_embed = self.style_model_out_proj(style_embed)
+        
         return style_embed
 
     def _replace_at_seq_beginning(self, embed, lengths, src):

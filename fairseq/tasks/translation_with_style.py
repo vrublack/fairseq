@@ -293,7 +293,7 @@ class TranslationWithStyleTask(FairseqTask):
         for param in style_model.parameters():
             param.requires_grad = False
 
-        model.set_style_model(style_model)
+        model.set_style_model(style_model, style_model.encoder.hidden_size)
 
         return model
 
