@@ -34,7 +34,7 @@ class SentenceRankingCriterion(FairseqCriterion):
         parser.add_argument('--save-predictions', metavar='FILE',
                             help='file to save predictions to')
         parser.add_argument('--ranking-head-name',
-                            default='sentence_classification_head',
+                            default='ranking',
                             help='name of the ranking head to use')
         # fmt: on
 

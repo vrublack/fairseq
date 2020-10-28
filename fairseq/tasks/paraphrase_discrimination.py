@@ -50,8 +50,6 @@ class ParaphraseDiscriminationTask(FairseqTask):
                                  'e.g., "train,valid" (default: all dataset splits)')
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
-        parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
-                            help='How to combine the seq length dimension of the model output')
 
     def __init__(self, args, dictionary):
         super().__init__(args)
@@ -188,12 +186,10 @@ class ParaphraseDiscriminationTask(FairseqTask):
 
         model = models.build_model(args, self)
 
-        model.set_sequence_embedding_head(
-            getattr(args, 'seq_embedding_reduction')
-        )
-
         if args.criterion == 'sentence_ranking':
-            model.set_classification_head()
+            model.register_classification_head('ranking')
+        elif args.criterion == 'triplet_loss':
+            model.set_sequence_embedding_head()
 
         return model
 

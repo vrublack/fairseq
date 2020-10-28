@@ -23,6 +23,8 @@ from typing import Dict, List, Optional, Tuple
 DEFAULT_MAX_SOURCE_POSITIONS = 1e5
 DEFAULT_MAX_TARGET_POSITIONS = 1e5
 
+CLASSIFICATION_HEAD_RANKING = 'ranking'
+CLASSIFICATION_HEAD_STANDARD = 'sentence_classification_head'
 
 class LSTMSequenceEmbeddingHead(nn.Module):
     def __init__(self, reduction):
@@ -113,7 +115,7 @@ class LSTMModel(FairseqEncoderDecoderModel):
     def build_model(cls, args, task):
         """Build a new model instance."""
         # make sure that all args are properly defaulted (in case there are any new ones)
-        base_architecture(args)
+        base_architecture_encoder(args)
 
         if args.encoder_layers != args.decoder_layers:
             raise ValueError('--encoder-layers must match --decoder-layers')
@@ -230,7 +232,6 @@ class LSTMEncoderModel(FairseqEncoderModel):
         self.args = args
         self.sequence_embedding_head = None
         self.classification_heads = nn.ModuleDict()
-        self.classification_head_name = None
 
     @staticmethod
     def add_args(parser):
@@ -256,6 +257,9 @@ class LSTMEncoderModel(FairseqEncoderModel):
                             help='dropout probability for encoder input embedding')
         parser.add_argument('--encoder-dropout-out', type=float, metavar='D',
                             help='dropout probability for encoder output')
+        parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
+                            help='How to combine the seq length dimension of the model output')
+
         # fmt: on
 
     @classmethod
@@ -299,21 +303,26 @@ class LSTMEncoderModel(FairseqEncoderModel):
         )
         return cls(args, encoder)
 
-    def set_sequence_embedding_head(self, reduction):
-        self.sequence_embedding_head = LSTMSequenceEmbeddingHead(reduction)
+    def set_sequence_embedding_head(self):
+        self.sequence_embedding_head = LSTMSequenceEmbeddingHead(self.args.seq_embedding_reduction)
 
-    def set_classification_head(self):
-        # have a dict with only one head to comply with the structure required by the sentence ranking loss
-        self.classification_head_name = 'sentence_classification_head'
-        self.classification_heads[self.classification_head_name] = \
-            BARTClassificationHead(2 * self.args.encoder_hidden_size, self.args.encoder_hidden_size,
-                                   1, 'relu', self.args.encoder_dropout_out)
+    def register_classification_head(self, name, num_classes=None, inner_dim=None, **kwargs):
+        if name == CLASSIFICATION_HEAD_RANKING:
+            self.classification_heads[name] = \
+                BARTClassificationHead(2 * self.args.encoder_hidden_size, self.args.encoder_hidden_size,
+                                       1, 'relu', self.args.encoder_dropout_out)
+        elif name == CLASSIFICATION_HEAD_STANDARD:
+            self.classification_heads[name] = \
+                BARTClassificationHead(self.args.encoder_hidden_size, self.args.encoder_hidden_size,
+                                       num_classes, 'relu', self.args.encoder_dropout_out)
+        else:
+            raise ValueError('Unknown classification head: ' + name)
+
+        if self.sequence_embedding_head is None:
+            self.set_sequence_embedding_head()
 
     def remove_classification_head(self):
-        if self.classification_head_name is not None:
-            del self.classification_heads[self.classification_head_name]
-            self.classification_head_name = None
-
+        self.classification_heads.clear()
 
     def forward(
         self,
@@ -332,16 +341,19 @@ class LSTMEncoderModel(FairseqEncoderModel):
         if self.sequence_embedding_head is not None:
             x = self.sequence_embedding_head(x[0], x[3])
 
-        if self.classification_heads:
+        if aux_tokens is not None and CLASSIFICATION_HEAD_RANKING in self.classification_heads:
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
-            assert aux_tokens is not None, "Classification head requires auxiliary tokens"
 
             x_aux = self.encoder(aux_tokens, src_lengths=aux_lengths, enforce_sorted=False)
             x_aux = self.sequence_embedding_head(x_aux[0], x_aux[3])
             # combine main and auxiliary embeddings
-            x = self.classification_heads[self.classification_head_name](torch.cat((x, x_aux), dim=1))
+            x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](torch.cat((x, x_aux), dim=1))
             # add dummy because the sentence ranking loss expects this
             x = x, None
+        elif CLASSIFICATION_HEAD_STANDARD in self.classification_heads:
+            assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
+
+            x = self.classification_heads[CLASSIFICATION_HEAD_STANDARD](x)
 
         return x
 
@@ -833,7 +845,7 @@ def lstm_luong_wmt_en_de(args):
 
 
 @register_model_architecture('lstm_encoder', 'lstm_encoder')
-def base_architecture(args):
+def base_architecture_encoder(args):
     args.dropout = getattr(args, 'dropout', 0.1)
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
     args.encoder_embed_path = getattr(args, 'encoder_embed_path', None)

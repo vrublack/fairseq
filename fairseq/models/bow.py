@@ -14,6 +14,8 @@ from fairseq.modules import FairseqDropout
 
 DEFAULT_MAX_POSITIONS = 1e5
 
+CLASSIFICATION_HEAD_RANKING = 'ranking'
+CLASSIFICATION_HEAD_STANDARD = 'sentence_classification_head'
 
 @register_model('bow_encoder')
 class BOWEncoderModel(FairseqEncoderModel):
@@ -26,7 +28,6 @@ class BOWEncoderModel(FairseqEncoderModel):
         self.args = args
         self.sequence_embedding_head = None
         self.classification_heads = nn.ModuleDict()
-        self.classification_head_name = None
 
     @staticmethod
     def add_args(parser):
@@ -40,6 +41,8 @@ class BOWEncoderModel(FairseqEncoderModel):
                             help='path to pre-trained embedding')
         parser.add_argument('--freeze-embed', action='store_true',
                             help='freeze embeddings')
+        parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
+                            help='How to combine the seq length dimension of the model output')
         # fmt: on
 
     @classmethod
@@ -76,20 +79,26 @@ class BOWEncoderModel(FairseqEncoderModel):
 
         return cls(args, encoder)
 
-    def set_sequence_embedding_head(self, reduction):
-        self.sequence_embedding_head = LSTMSequenceEmbeddingHead(reduction)
+    def set_sequence_embedding_head(self):
+        self.sequence_embedding_head = LSTMSequenceEmbeddingHead(self.args.seq_embedding_reduction)
 
-    def set_classification_head(self):
-        # have a dict with only one head to comply with the structure required by the sentence ranking loss
-        self.classification_head_name = 'sentence_classification_head'
-        self.classification_heads[self.classification_head_name] = \
-            BARTClassificationHead(2 * self.args.encoder_embed_dim, self.args.encoder_embed_dim,
-                                   1, 'relu', self.args.dropout)
+    def register_classification_head(self, name, num_classes=None, inner_dim=None, **kwargs):
+        if name == CLASSIFICATION_HEAD_RANKING:
+            self.classification_heads[name] = \
+                BARTClassificationHead(2 * self.args.encoder_embed_dim, self.args.encoder_embed_dim,
+                                       1, 'relu', self.args.dropout)
+        elif name == CLASSIFICATION_HEAD_STANDARD:
+            self.classification_heads[name] = \
+                BARTClassificationHead(self.args.encoder_embed_dim, self.args.encoder_embed_dim,
+                                       num_classes, 'relu', self.args.dropout)
+        else:
+            raise ValueError('Unknown classification head: ' + name)
+
+        if self.sequence_embedding_head is None:
+            self.set_sequence_embedding_head()
 
     def remove_classification_head(self):
-        if self.classification_head_name is not None:
-            del self.classification_heads[self.classification_head_name]
-            self.classification_head_name = None
+        self.classification_heads.clear()
 
     def forward(
             self,
@@ -104,16 +113,19 @@ class BOWEncoderModel(FairseqEncoderModel):
         if self.sequence_embedding_head is not None:
             x = self.sequence_embedding_head(x, padding_mask)
 
-        if self.classification_heads:
+        if aux_tokens is not None and CLASSIFICATION_HEAD_RANKING in self.classification_heads:
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
-            assert aux_tokens is not None, "Classification head requires auxiliary tokens"
 
             x_aux, padding_mask_aux = self.encoder(aux_tokens, src_lengths=aux_lengths)
             x_aux = self.sequence_embedding_head(x_aux, padding_mask_aux)
             # combine main and auxiliary embeddings
-            x = self.classification_heads[self.classification_head_name](torch.cat((x, x_aux), dim=1))
+            x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](torch.cat((x, x_aux), dim=1))
             # add dummy because the sentence ranking loss expects this
             x = x, None
+        elif CLASSIFICATION_HEAD_STANDARD in self.classification_heads:
+            assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
+
+            x = self.classification_heads[CLASSIFICATION_HEAD_STANDARD](x)
 
         return x
 

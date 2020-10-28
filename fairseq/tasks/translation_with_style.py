@@ -274,7 +274,6 @@ class TranslationWithStyleTask(FairseqTask):
             gen_args = json.loads(getattr(args, 'eval_bleu_args', '{}') or '{}')
             self.sequence_generator = self.build_generator([model], Namespace(**gen_args))
 
-        # TODO multiple sequences for style
         style_checkpoint = checkpoint_utils.load_checkpoint_to_cpu(args.style_embed_model)
 
         # swapping src and tgt dict as a hack to get the style model to have the embedding size from the target dictionary
@@ -282,7 +281,7 @@ class TranslationWithStyleTask(FairseqTask):
         style_model = super().build_model(style_checkpoint['args'])
         self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
 
-        style_model.set_sequence_embedding_head(getattr(style_checkpoint['args'], 'seq_embedding_reduction'))
+        style_model.set_sequence_embedding_head()
         assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[
                    0] == style_model.encoder.embed_tokens.num_embeddings, \
             "Style model needs to have the same vocabulary and embedding size"
