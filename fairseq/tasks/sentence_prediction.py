@@ -23,7 +23,7 @@ from fairseq.data import (
     RightPadDataset,
     RollDataset,
     SortDataset,
-    StripTokenDataset,
+    StripTokenDataset, TokenBlockDataset,
 )
 from fairseq.data.shorten_dataset import maybe_shorten_dataset
 from fairseq.tasks import FairseqTask, register_task
@@ -62,6 +62,9 @@ class SentencePredictionTask(FairseqTask):
                                  'e.g., "train,valid" (default: all dataset splits)')
         parser.add_argument('--add-prev-output-tokens', action='store_true', default=False,
                             help='add prev_output_tokens to sample, used for encoder-decoder arch')
+        parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
+                            help='max number of tokens in the source sequence')
+
 
     def __init__(self, args, data_dictionary, label_dictionary):
         super().__init__(args)
@@ -221,6 +224,26 @@ class SentencePredictionTask(FairseqTask):
 
         self.datasets[split] = dataset
         return self.datasets[split]
+    
+    def build_dataset_for_inference(self, src_tokens, src_lengths):
+        dataset = TokenBlockDataset(
+            src_tokens,
+            src_lengths,
+            block_size=None,  # ignored for "eos" break mode
+            pad=self.source_dictionary.pad(),
+            eos=self.source_dictionary.eos(),
+            break_mode="eos",
+        )
+        return NestedDictionaryDataset(
+            {
+                "id": IdDataset(),
+                "net_input": {
+                    "src_tokens": RightPadDataset(dataset, pad_idx=self.source_dictionary.pad()),
+                    "src_lengths": NumelDataset(dataset),
+                }
+            },
+            sizes=[np.array(src_lengths)],
+        )
 
     def build_model(self, args):
         from fairseq import models
@@ -247,3 +270,7 @@ class SentencePredictionTask(FairseqTask):
     @property
     def label_dictionary(self):
         return self._label_dictionary
+
+    def extract_sequence_embeddings_step(self, sample, model):
+        model.remove_classification_head()
+        return model(**sample['net_input'])

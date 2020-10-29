@@ -330,7 +330,8 @@ class LSTMEncoderModel(FairseqEncoderModel):
         src_lengths,
         aux_tokens=None,
         aux_lengths=None,
-        classification_head_name=None   # ignored
+        classification_head_name=None,   # ignored
+        features_only=False
     ):
         # fixes CUDA error: an illegal memory access was encountered
         # TODO better solution
@@ -354,6 +355,9 @@ class LSTMEncoderModel(FairseqEncoderModel):
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
 
             x = self.classification_heads[CLASSIFICATION_HEAD_STANDARD](x)
+
+        if features_only:
+            x = x, None
 
         return x
 

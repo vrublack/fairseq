@@ -106,7 +106,8 @@ class BOWEncoderModel(FairseqEncoderModel):
             src_lengths,
             aux_tokens=None,
             aux_lengths=None,
-            classification_head_name=None  # ignored
+            classification_head_name=None,  # ignored
+            features_only=False
     ):
         x, padding_mask = self.encoder(src_tokens, src_lengths=src_lengths)
 
@@ -126,6 +127,9 @@ class BOWEncoderModel(FairseqEncoderModel):
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
 
             x = self.classification_heads[CLASSIFICATION_HEAD_STANDARD](x)
+
+        if features_only:
+            x = x, None
 
         return x
 
