@@ -50,6 +50,8 @@ class SentencePredictionTask(FairseqTask):
                             help='number of classes or regression targets')
         parser.add_argument('--init-token', type=int, default=None,
                             help='add token at the beginning of each batch item')
+        parser.add_argument('--mask-token', type=int, default=1,
+                            help='Add mask token to vocab')
         parser.add_argument('--separator-token', type=int, default=None,
                             help='add separator token between inputs')
         parser.add_argument('--regression-target', action='store_true', default=False)
@@ -87,7 +89,8 @@ class SentencePredictionTask(FairseqTask):
             filename (str): the filename
         """
         dictionary = Dictionary.load(filename)
-        dictionary.add_symbol('<mask>')
+        if args.mask_token:
+            dictionary.add_symbol('<mask>')
         return dictionary
 
     @classmethod
