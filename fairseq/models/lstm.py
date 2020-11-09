@@ -150,7 +150,7 @@ class LSTMModel(FairseqEncoderDecoderModel):
     def build_model(cls, args, task):
         """Build a new model instance."""
         # make sure that all args are properly defaulted (in case there are any new ones)
-        base_architecture_encoder(args)
+        base_architecture(args)
 
         if args.encoder_layers != args.decoder_layers:
             raise ValueError('--encoder-layers must match --decoder-layers')
@@ -304,7 +304,7 @@ class LSTMEncoderModel(FairseqEncoderModel):
     def build_model(cls, args, task):
         """Build a new model instance."""
         # make sure that all args are properly defaulted (in case there are any new ones)
-        base_architecture(args)
+        base_architecture_encoder(args)
 
         max_source_positions = getattr(args, 'max_source_positions', DEFAULT_MAX_SOURCE_POSITIONS)
 
