@@ -15,7 +15,6 @@ from fairseq.models import (
     register_model,
     register_model_architecture, FairseqEncoderModel,
 )
-from fairseq.models.bart import BARTClassificationHead
 from fairseq.modules import AdaptiveSoftmax, FairseqDropout
 from torch import Tensor
 from typing import Dict, List, Optional, Tuple
@@ -25,6 +24,42 @@ DEFAULT_MAX_TARGET_POSITIONS = 1e5
 
 CLASSIFICATION_HEAD_RANKING = 'ranking'
 CLASSIFICATION_HEAD_STANDARD = 'sentence_classification_head'
+
+
+class LSTMClassificationHead(nn.Module):
+    """Head for sentence-level classification tasks."""
+
+    def __init__(
+        self,
+        input_dim,
+        inner_dim,
+        num_classes,
+        activation_fn,
+        pooler_dropout,
+    ):
+        super().__init__()
+
+        if inner_dim == -1:
+            # no inner
+            inner_dim = input_dim
+            self.dense = None
+        else:
+            self.dense = nn.Linear(input_dim, inner_dim)
+            self.activation_fn = utils.get_activation_fn(activation_fn)
+
+        self.dropout = nn.Dropout(p=pooler_dropout)
+        self.out_proj = nn.Linear(inner_dim, num_classes)
+
+    def forward(self, features, **kwargs):
+        x = features
+        if self.dense is not None:
+            x = self.dropout(x)
+            x = self.dense(x)
+            x = self.activation_fn(x)
+        x = self.dropout(x)
+        x = self.out_proj(x)
+        return x
+
 
 class LSTMSequenceEmbeddingHead(nn.Module):
     def __init__(self, reduction):
@@ -257,8 +292,11 @@ class LSTMEncoderModel(FairseqEncoderModel):
                             help='dropout probability for encoder input embedding')
         parser.add_argument('--encoder-dropout-out', type=float, metavar='D',
                             help='dropout probability for encoder output')
+        
         parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
                             help='How to combine the seq length dimension of the model output')
+        parser.add_argument('--classification-head-hidden', type=int,
+                            help='hidden dimension in classification head or -1 to have no inner layer at all')
 
         # fmt: on
 
@@ -309,11 +347,11 @@ class LSTMEncoderModel(FairseqEncoderModel):
     def register_classification_head(self, name, num_classes=None, inner_dim=None, **kwargs):
         if name == CLASSIFICATION_HEAD_RANKING:
             self.classification_heads[name] = \
-                BARTClassificationHead(2 * self.args.encoder_hidden_size, self.args.encoder_hidden_size,
+                LSTMClassificationHead(2 * self.args.encoder_hidden_size, self.args.classification_head_hidden,
                                        1, 'relu', self.args.encoder_dropout_out)
         elif name == CLASSIFICATION_HEAD_STANDARD:
             self.classification_heads[name] = \
-                BARTClassificationHead(self.args.encoder_hidden_size, self.args.encoder_hidden_size,
+                LSTMClassificationHead(self.args.encoder_hidden_size, self.args.classification_head_hidden,
                                        num_classes, 'relu', self.args.encoder_dropout_out)
         else:
             raise ValueError('Unknown classification head: ' + name)
@@ -859,3 +897,4 @@ def base_architecture_encoder(args):
     args.encoder_bidirectional = getattr(args, 'encoder_bidirectional', False)
     args.encoder_dropout_in = getattr(args, 'encoder_dropout_in', args.dropout)
     args.encoder_dropout_out = getattr(args, 'encoder_dropout_out', args.dropout)
+    args.classification_head_hidden = getattr(args, 'classification_head_hidden', args.encoder_hidden_size)

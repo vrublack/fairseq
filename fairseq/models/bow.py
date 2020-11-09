@@ -8,8 +8,7 @@ from fairseq.models import (
     register_model,
     register_model_architecture, FairseqEncoderModel,
 )
-from fairseq.models.bart import BARTClassificationHead
-from fairseq.models.lstm import Embedding, LSTMSequenceEmbeddingHead
+from fairseq.models.lstm import Embedding, LSTMSequenceEmbeddingHead, LSTMClassificationHead
 from fairseq.modules import FairseqDropout
 
 DEFAULT_MAX_POSITIONS = 1e5
@@ -41,8 +40,11 @@ class BOWEncoderModel(FairseqEncoderModel):
                             help='path to pre-trained embedding')
         parser.add_argument('--freeze-embed', action='store_true',
                             help='freeze embeddings')
+
         parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
                             help='How to combine the seq length dimension of the model output')
+        parser.add_argument('--classification-head-hidden', type=int,
+                            help='hidden dimension in classification head or -1 to have no inner layer at all')
         # fmt: on
 
     @classmethod
@@ -85,11 +87,11 @@ class BOWEncoderModel(FairseqEncoderModel):
     def register_classification_head(self, name, num_classes=None, inner_dim=None, **kwargs):
         if name == CLASSIFICATION_HEAD_RANKING:
             self.classification_heads[name] = \
-                BARTClassificationHead(2 * self.args.encoder_embed_dim, self.args.encoder_embed_dim,
+                LSTMClassificationHead(2 * self.args.encoder_embed_dim, self.args.classification_head_hidden,
                                        1, 'relu', self.args.dropout)
         elif name == CLASSIFICATION_HEAD_STANDARD:
             self.classification_heads[name] = \
-                BARTClassificationHead(self.args.encoder_embed_dim, self.args.encoder_embed_dim,
+                LSTMClassificationHead(self.args.encoder_embed_dim, self.args.classification_head_hidden,
                                        num_classes, 'relu', self.args.dropout)
         else:
             raise ValueError('Unknown classification head: ' + name)
@@ -180,3 +182,4 @@ def base_architecture(args):
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
     args.encoder_embed_path = getattr(args, 'encoder_embed_path', None)
     args.freeze_embed = getattr(args, 'freeze_embed', False)
+    args.classification_head_hidden = getattr(args, 'classification_head_hidden', args.encoder_embed_dim)
