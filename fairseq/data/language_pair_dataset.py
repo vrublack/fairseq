@@ -34,6 +34,9 @@ def collate(
             pad_to_length=pad_to_length,
         )
 
+    def merge_vec(key):
+        return torch.stack([s[key] for s in samples])
+
     def check_alignment(alignment, src_len, tgt_len):
         if alignment is None or len(alignment) == 0:
             return False
@@ -96,16 +99,6 @@ def collate(
     else:
         ntokens = src_lengths.sum().item()
 
-    if samples[0].get('style', None) is not None:
-        # explicitely condition the model on style (usually during validation)
-        style_tokens = merge('style', None)
-        style_tokens = style_tokens.index_select(0, sort_order)
-    elif condition_style:
-        # net learns to produce target from target style tokens
-        style_tokens = target.unsqueeze(1)
-    else:
-        style_tokens = None
-
     batch = {
         'id': id,
         'nsentences': len(samples),
@@ -116,8 +109,17 @@ def collate(
         },
         'target': target,
     }
-    if style_tokens is not None:
-        batch['net_input']['style_tokens'] = style_tokens
+    if samples[0].get('style_emb', None) is not None:
+        # explicitely condition the model on style (usually during validation)
+        style_emb = merge_vec('style_emb')
+        batch['net_input']['style_emb'] = style_emb.index_select(0, sort_order)
+    elif samples[0].get('style', None) is not None:
+        # explicitely condition the model on style
+        style_tokens = merge('style', None)
+        batch['net_input']['style_tokens'] = style_tokens.index_select(0, sort_order)
+    elif condition_style:
+        # net learns to produce target from target style tokens
+        batch['net_input']['style_tokens'] = target.unsqueeze(1)
 
     if prev_output_tokens is not None:
         batch['net_input']['prev_output_tokens'] = prev_output_tokens.index_select(0, sort_order)
@@ -199,6 +201,7 @@ class LanguagePairDataset(FairseqDataset):
         src_lang_id=None,
         tgt_lang_id=None,
         style_data=None,
+        style_emb=None,
         condition_style=False
     ):
         if tgt_dict is not None:
@@ -209,13 +212,16 @@ class LanguagePairDataset(FairseqDataset):
             assert len(src) == len(tgt), "Source and target must contain the same number of examples"
         if style_data is not None:
             assert len(src) == len(style_data), "Source and style must contain the same number of examples"
+        if style_emb is not None:
+            assert len(src) == len(style_emb), "Source and style must contain the same number of examples"
         self.src = src
         self.tgt = tgt
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
-        self.style = style_data
+        self.style_seqs = style_data
+        self.style_emb = style_emb
         self.condition_style = condition_style
         self.left_pad_source = left_pad_source
         self.left_pad_target = left_pad_target
@@ -297,8 +303,12 @@ class LanguagePairDataset(FairseqDataset):
             'source': src_item,
             'target': tgt_item,
         }
-        if self.style is not None:
-            example['style'] = self.style[index]
+
+        if self.style_emb is not None:
+            example['style_emb'] = self.style_emb[index]
+        elif self.style_seqs is not None:
+            example['style'] = self.style_seqs[index]
+
         if self.align_dataset is not None:
             example['alignment'] = self.align_dataset[index]
         return example

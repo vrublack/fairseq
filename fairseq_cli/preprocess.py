@@ -248,7 +248,7 @@ def main(args):
                 outprefix = "test{}".format(k) if k > 0 else "test"
                 make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers)
 
-    def make_all_style(lang, vocab, validpref, testpref):
+    def make_all_style_tokens(lang, vocab, validpref, testpref):
         if validpref:
             for k, validpref in enumerate(validpref.split(",")):
                 outprefix = "valid{}-style".format(k) if k > 0 else "valid-style"
@@ -257,6 +257,16 @@ def main(args):
             for k, testpref in enumerate(testpref.split(",")):
                 outprefix = "test{}-style".format(k) if k > 0 else "test-style"
                 make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers)
+
+    def make_all_style_embeddings(lang, validpref, testpref):
+        if validpref:
+            shutil.copyfile(file_name(validpref, lang),
+                            dest_path("valid-style-embeds.{}-{}".format(args.source_lang, args.target_lang), lang))
+        if testpref:
+            shutil.copyfile(file_name(testpref, lang),
+                            dest_path("test-style-embeds.{}-{}".format(args.source_lang, args.target_lang), lang))
+
+
 
     def make_all_alignments():
         if args.trainpref and os.path.exists(args.trainpref + "." + args.align_suffix):
@@ -269,7 +279,8 @@ def main(args):
     make_all(args.source_lang, src_dict, args.trainpref, args.validpref, args.testpref)
     if target:
         make_all(args.target_lang, tgt_dict, args.trainpref, args.validpref, args.testpref)
-    make_all_style(args.target_lang, tgt_dict, args.validpref_style, args.testpref_style)
+    make_all_style_tokens(args.target_lang, tgt_dict, args.validpref_style, args.testpref_style)
+    make_all_style_embeddings(args.target_lang, args.validpref_style_embeddings, args.testpref_style_embeddings)
     if args.align_suffix:
         make_all_alignments()
 

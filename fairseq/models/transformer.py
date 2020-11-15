@@ -274,7 +274,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         features_only: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
-        style_tokens = None
+        style_tokens: torch.Tensor = None,
+        style_emb: torch.Tensor = None
     ):
         """
         Run the forward pass for an encoder-decoder model.
@@ -284,7 +285,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         """
 
         encoder_out = self.encoder(
-            src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens
+            src_tokens, src_lengths=src_lengths, return_all_hiddens=return_all_hiddens, style_tokens=style_tokens,
+            style_emb=style_emb
         )
         decoder_out = self.decoder(
             prev_output_tokens,
@@ -399,39 +401,44 @@ class TransformerEncoder(FairseqEncoder):
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
-    def forward_style_embedding(self, style_tokens, out_dim, other_emb):
-        bsize, style_n, style_seq_len = style_tokens.shape
-
+    def forward_style_embedding(self, style_tokens, style_embed, other_emb):
         # randomly assign empty style sequence to all style sequences of a sample
         # if dropout it active during inference, computed_style_shortcut can't be done any more, but dropout during
         # inference is only for debugging/baseline so it's fine
-        dummy_ones = style_tokens.new_ones((bsize, 1), dtype=torch.float32)
-        whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
-        empty_seq = style_tokens.new_tensor([self.tgt_dict.eos()] + [self.tgt_dict.pad()] * (style_seq_len - 1))
-        style_tokens = style_tokens.masked_scatter(whole_sample_dropout_mask.unsqueeze(2).expand(-1, style_n, style_seq_len),
-                                    empty_seq.view(1, 1, -1).expand(bsize, style_n, -1))
+        assert not self.training or style_embed is None or self.args.style_embed_dropout == 0, \
+            "Style embed dropout not yet implemented for supplied style embeddings"
 
-        style_padding_mask = ~style_tokens.eq(self.tgt_dict.pad())
-        style_lens = torch.sum(style_padding_mask, dim=-1)
+        # if style embedding isn't supplied, compute it
+        if style_embed is None:
+            bsize, style_n, style_seq_len = style_tokens.shape
 
-        # compute only once if all samples have the same style sequences
-        unique_samples = torch.unique_consecutive(style_tokens, dim=0)
-        computed_style_shortcut = unique_samples.shape[0] == 1
-        if computed_style_shortcut:
-            style_tokens = unique_samples
-            style_lens = style_lens[0].unsqueeze(0)
+            dummy_ones = style_tokens.new_ones((bsize, 1), dtype=torch.float32)
+            whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
+            empty_seq = style_tokens.new_tensor([self.tgt_dict.eos()] + [self.tgt_dict.pad()] * (style_seq_len - 1))
+            style_tokens = style_tokens.masked_scatter(whole_sample_dropout_mask.unsqueeze(2).expand(-1, style_n, style_seq_len),
+                                        empty_seq.view(1, 1, -1).expand(bsize, style_n, -1))
 
-        assert not style_tokens[:, 0, 0].eq(self.tgt_dict.pad()).any(), \
-            "Only accepts padding on the right side for style tokens"
+            style_padding_mask = ~style_tokens.eq(self.tgt_dict.pad())
+            style_lens = torch.sum(style_padding_mask, dim=-1)
 
-        style_embed = []
-        for i in range(style_n):
-            sample_max_style_lens = max(style_lens[:, i])
-            style_embed.append(self.style_model(style_tokens[:, i, :sample_max_style_lens], style_lens[:, i]))
-        style_embed = torch.mean(torch.stack(style_embed), dim=0)
+            # compute only once if all samples have the same style sequences
+            unique_samples = torch.unique_consecutive(style_tokens, dim=0)
+            computed_style_shortcut = unique_samples.shape[0] == 1
+            if computed_style_shortcut:
+                style_tokens = unique_samples
+                style_lens = style_lens[0].unsqueeze(0)
 
-        if computed_style_shortcut:
-            style_embed = style_embed.repeat(bsize, 1)
+            assert not style_tokens[:, 0, 0].eq(self.tgt_dict.pad()).any(), \
+                "Only accepts padding on the right side for style tokens"
+
+            style_embed = []
+            for i in range(style_n):
+                sample_max_style_lens = max(style_lens[:, i])
+                style_embed.append(self.style_model(style_tokens[:, i, :sample_max_style_lens], style_lens[:, i]))
+            style_embed = torch.mean(torch.stack(style_embed), dim=0)
+
+            if computed_style_shortcut:
+                style_embed = style_embed.repeat(bsize, 1)
 
         if self.style_embed_norm is not None:
             style_embed = self.style_embed_norm(style_embed, other_emb)
@@ -457,13 +464,13 @@ class TransformerEncoder(FairseqEncoder):
         tokens.scatter_(1, (tokens.shape[1] - new_lengths).unsqueeze(1), seq_beginning_val)
         return tokens
 
-    def forward_embedding(self, src_tokens, src_lengths, style_tokens):
+    def forward_embedding(self, src_tokens, src_lengths, style_tokens, style_emb):
         # embed tokens and positions
         embed = self.embed_tokens(src_tokens)
 
-        if style_tokens is not None and self.style_embed_position == 'encoder':
+        if (style_tokens is not None or style_emb is not None) and self.style_embed_position == 'encoder':
             # replace dummy token with style embedding
-            style_emb = self.forward_style_embedding(style_tokens, embed.shape[2], embed)
+            style_emb = self.forward_style_embedding(style_tokens, style_emb, embed)
             self._replace_at_seq_beginning(embed, src_lengths, style_emb)
 
         x = embed = self.embed_scale * embed
@@ -476,7 +483,8 @@ class TransformerEncoder(FairseqEncoder):
             x = self.quant_noise(x)
         return x, embed
 
-    def forward(self, src_tokens, src_lengths, return_all_hiddens: bool = False, style_tokens: torch.Tensor = None):
+    def forward(self, src_tokens, src_lengths, return_all_hiddens: bool = False, style_tokens: torch.Tensor = None,
+                style_emb: torch.Tensor = None):
         """
         Args:
             src_tokens (LongTensor): tokens in the source language of shape
@@ -508,7 +516,7 @@ class TransformerEncoder(FairseqEncoder):
                                                              self.tgt_dict.unk())
 
 
-        x, encoder_embedding = self.forward_embedding(src_tokens, src_lengths, style_tokens)
+        x, encoder_embedding = self.forward_embedding(src_tokens, src_lengths, style_tokens, style_emb)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -528,12 +536,12 @@ class TransformerEncoder(FairseqEncoder):
         if self.layer_norm is not None:
             x = self.layer_norm(x)
 
-        if style_tokens is not None and self.style_embed_position == 'decoder':
+        if  (style_tokens is not None or style_emb is not None) and self.style_embed_position == 'decoder':
             assert not src_tokens[:, -1].eq(self.tgt_dict.pad()).any(), \
                 "Only accepts padding on the left side"
 
             src_lengths = src_lengths.add(1)
-            style_emb = self.forward_style_embedding(style_tokens, x.shape[2], x)
+            style_emb = self.forward_style_embedding(style_tokens, style_emb, x)
             x = torch.cat([x[0].unsqueeze(0), x], dim=0)
 
             x.transpose_(0, 1)

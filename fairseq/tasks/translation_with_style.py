@@ -10,6 +10,7 @@ import os
 from argparse import Namespace
 
 import numpy as np
+import torch
 
 from fairseq import metrics, options, utils, checkpoint_utils
 from fairseq.data import (
@@ -24,6 +25,7 @@ from fairseq.data import (
 )
 from fairseq.data.lengthen_dataset import LengthenDataset
 from fairseq.data.stack_sentences_dataset import StackSentencesDataset
+from fairseq.data.tensor_dataset import TensorDataset
 from fairseq.models import ARCH_MODEL_REGISTRY
 from fairseq.models.transformer import TransformerModel
 from fairseq.tasks import FairseqTask, register_task
@@ -40,24 +42,29 @@ def load_langpair_dataset(data_path, split, src, src_dict, tgt, tgt_dict, datase
         filename = os.path.join(data_path, '{}.{}-{}.{}'.format(split, src, tgt, lang))
         return indexed_dataset.dataset_exists(filename, impl=dataset_impl)
 
-    style_datasets = []
-
-    # there can be multiple style datasets, each one adding one more style sequence to each sentence
-    for k in itertools.count():
-        split_k = split + (str(k) if k > 0 else '') + '-style'
-        # infer langcode
-        if split_exists(split_k, src, tgt, tgt, data_path):
-            style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, src, tgt))
-        elif split_exists(split_k, tgt, src, tgt, data_path):
-            style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, tgt, src))
-        else:
-            if k > 0 or split == 'train':
-                break
+    # first try to load style embeddings. If not provided, try to load style sequence that will be embedded by the model
+    style_vec_path = os.path.join(data_path, '{}.{}-{}.{}'.format(split + '-style-embeds', src, tgt, tgt))
+    if os.path.exists(style_vec_path):
+        style_vec_dataset = TensorDataset(torch.load(style_vec_path))
+        style_datasets = None
+    else:
+        style_vec_dataset = None
+        style_datasets = []
+        # there can be multiple style datasets, each one adding one more style sequence to each sentence
+        for k in itertools.count():
+            split_k = split + (str(k) if k > 0 else '') + '-style'
+            # infer langcode
+            if split_exists(split_k, src, tgt, tgt, data_path):
+                style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, src, tgt))
+            elif split_exists(split_k, tgt, src, tgt, data_path):
+                style_prefix = os.path.join(data_path, '{}.{}-{}.'.format(split_k, tgt, src))
             else:
-                raise FileNotFoundError('Dataset not found: {} ({})'.format(split_k, data_path))
+                if k > 0 or split == 'train':
+                    break
+                else:
+                    raise FileNotFoundError('Dataset not found: {} ({})'.format(split_k, data_path))
 
-        style_dataset = data_utils.load_indexed_dataset(style_prefix + tgt, tgt_dict, dataset_impl)
-        style_datasets.append(style_dataset)
+            style_datasets.append(data_utils.load_indexed_dataset(style_prefix + tgt, tgt_dict, dataset_impl))
 
     if split_exists(split, src, tgt, src, data_path):
         prefix = os.path.join(data_path, '{}.{}-{}.'.format(split, src, tgt))
@@ -91,9 +98,15 @@ def load_langpair_dataset(data_path, split, src, src_dict, tgt, tgt_dict, datase
             tgt_dataset = AppendTokenDataset(tgt_dataset, tgt_dict.index('[{}]'.format(tgt)))
         eos = tgt_dict.index('[{}]'.format(tgt))
 
-    assert split == 'train' or style_datasets, 'Style data must be provided for non-train splits'
+    assert split == 'train' or style_datasets or style_vec_dataset, 'Style data must be provided for non-train splits'
 
-    if style_datasets:
+    if style_vec_dataset:
+        logger.info(f'Loaded style vectors for split {split}')
+        # allow only a single style embedding to be passed if it is the same for every sample
+        if len(style_vec_dataset) == 1:
+            style_vec_dataset = LengthenDataset(style_vec_dataset, len(src_dataset))
+    elif style_datasets:
+        logger.info(f'{len(style_datasets)} style sequences loaded for split {split}')
         style_datasets = StackSentencesDataset(tgt_dict.pad(), *style_datasets)
         # allow only a single style sequence to be passed if it is the same for every sample
         if len(style_datasets) == 1:
@@ -111,6 +124,7 @@ def load_langpair_dataset(data_path, split, src, src_dict, tgt, tgt_dict, datase
         num_buckets=num_buckets,
         shuffle=shuffle,
         style_data=style_datasets,
+        style_emb=style_vec_dataset,
         condition_style=True
     )
 
@@ -189,7 +203,7 @@ class TranslationWithStyleTask(FairseqTask):
                             help='print sample generations during validation')
 
         # options for style
-        parser.add_argument('--style-embed-model', type=str, metavar='STR', required=True,
+        parser.add_argument('--style-embed-model', type=str, metavar='STR', required=False,
                             help='path to model used to generate style embeddings')
         # fmt: on
 
@@ -274,25 +288,26 @@ class TranslationWithStyleTask(FairseqTask):
             gen_args = json.loads(getattr(args, 'eval_bleu_args', '{}') or '{}')
             self.sequence_generator = self.build_generator([model], Namespace(**gen_args))
 
-        style_checkpoint = checkpoint_utils.load_checkpoint_to_cpu(args.style_embed_model)
+        if args.style_embed_model:
+            style_checkpoint = checkpoint_utils.load_checkpoint_to_cpu(args.style_embed_model)
 
-        # swapping src and tgt dict as a hack to get the style model to have the embedding size from the target dictionary
-        self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
-        style_model = super().build_model(style_checkpoint['args'])
-        self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
+            # swapping src and tgt dict as a hack to get the style model to have the embedding size from the target dictionary
+            self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
+            style_model = super().build_model(style_checkpoint['args'])
+            self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
 
-        style_model.set_sequence_embedding_head()
-        assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[
-                   0] == style_model.encoder.embed_tokens.num_embeddings, \
-            "Style model needs to have the same vocabulary and embedding size"
-        # load weights without classification head that was potentially saved
-        style_model.load_state_dict(style_checkpoint['model'], strict=False)
+            style_model.set_sequence_embedding_head()
+            assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[
+                       0] == style_model.encoder.embed_tokens.num_embeddings, \
+                "Style model needs to have the same vocabulary and embedding size"
+            # load weights without classification head that was potentially saved
+            style_model.load_state_dict(style_checkpoint['model'], strict=False)
 
-        # make style model non-trainable
-        for param in style_model.parameters():
-            param.requires_grad = False
+            # make style model non-trainable
+            for param in style_model.parameters():
+                param.requires_grad = False
 
-        model.set_style_model(style_model, style_model.encoder.hidden_size)
+            model.set_style_model(style_model, style_model.encoder.hidden_size)
 
         return model
 
