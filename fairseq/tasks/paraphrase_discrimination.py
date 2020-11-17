@@ -51,6 +51,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
         parser.add_argument('--num-classes', type=int, default=-1, help='Dummy arg')
+        parser.add_argument('--headless', action='store_true', default=False)
 
     def __init__(self, args, dictionary):
         super().__init__(args)
@@ -70,7 +71,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
 
     @classmethod
     def setup_task(cls, args, **kwargs):
-        assert args.criterion == 'triplet_loss' or args.criterion == 'sentence_ranking', \
+        assert args.headless or args.criterion == 'triplet_loss' or args.criterion == 'sentence_ranking', \
             'Must set --criterion=triplet_loss or sentence_ranking'
 
         if args.criterion == 'sentence_ranking':

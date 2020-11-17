@@ -66,6 +66,7 @@ class SentencePredictionTask(FairseqTask):
                             help='add prev_output_tokens to sample, used for encoder-decoder arch')
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
+        parser.add_argument('--headless', action='store_true', default=False)
 
 
     def __init__(self, args, data_dictionary, label_dictionary):
@@ -89,13 +90,13 @@ class SentencePredictionTask(FairseqTask):
             filename (str): the filename
         """
         dictionary = Dictionary.load(filename)
-        if args.mask_token:
+        if args.mask_token and not args.headless:
             dictionary.add_symbol('<mask>')
         return dictionary
 
     @classmethod
     def setup_task(cls, args, **kwargs):
-        assert args.num_classes > 0, 'Must set --num-classes'
+        assert args.headless or args.num_classes > 0, 'Must set --num-classes'
 
         # load data dictionary
         data_dict = cls.load_dictionary(
@@ -106,16 +107,17 @@ class SentencePredictionTask(FairseqTask):
         logger.info('[input] dictionary: {} types'.format(len(data_dict)))
 
         label_dict = None
-        if not args.regression_target:
-            # load label dictionary
-            label_dict = cls.load_dictionary(
-                args,
-                os.path.join(args.data, 'label', 'dict.txt'),
-                source=False,
-            )
-            logger.info('[label] dictionary: {} types'.format(len(label_dict)))
-        else:
-            label_dict = data_dict
+        if not args.headless:
+            if not args.regression_target:
+                # load label dictionary
+                label_dict = cls.load_dictionary(
+                    args,
+                    os.path.join(args.data, 'label', 'dict.txt'),
+                    source=False,
+                )
+                logger.info('[label] dictionary: {} types'.format(len(label_dict)))
+            else:
+                label_dict = data_dict
         return SentencePredictionTask(args, data_dict, label_dict)
 
     def load_dataset(self, split, combine=False, **kwargs):
