@@ -50,6 +50,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
                                  'e.g., "train,valid" (default: all dataset splits)')
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
+        parser.add_argument('--num-classes', type=int, default=-1, help='Dummy arg')
 
     def __init__(self, args, dictionary):
         super().__init__(args)
