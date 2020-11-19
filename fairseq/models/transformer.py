@@ -440,21 +440,22 @@ class TransformerEncoder(FairseqEncoder):
             if computed_style_shortcut:
                 style_embed = style_embed.repeat(bsize, 1)
 
+        style_embed = self.style_model_out_proj(style_embed)
+
+        if self.style_embed_noise_stddev and self.training:
+            noise = torch.randn_like(style_embed)
+            # TODO multiplicate noise?
+            style_embed = style_embed + noise * self.style_embed_noise_stddev
+
+        # norm at the end so the final tensor is normalized to match the other embeddings
         if self.style_embed_norm is not None:
             style_embed = self.style_embed_norm(style_embed, other_emb)
 
-        if self.style_embed_noise_stddev and self.training:
-            noise = style_embed.new(style_embed.shape)
-            torch.randn(noise.shape, out=noise)
-            style_embed += noise * self.style_embed_noise_stddev
-        
-        style_embed = self.style_model_out_proj(style_embed)
-        
         return style_embed
 
     def _replace_at_seq_beginning(self, embed, lengths, src):
         scatter_index = (embed.shape[1] - lengths).view(-1, 1, 1).expand(-1, -1, embed.shape[2])
-        embed.scatter_(1, scatter_index, src.unsqueeze(1))
+        return embed.scatter(1, scatter_index, src.unsqueeze(1))
 
     def _insert_token_at_seq_beginning(self, tokens, new_lengths, fill_val, seq_beginning_val):
         dummy_tokens = tokens.new(size=(tokens.shape[0], 1))
@@ -471,7 +472,7 @@ class TransformerEncoder(FairseqEncoder):
         if (style_tokens is not None or style_emb is not None) and self.style_embed_position == 'encoder':
             # replace dummy token with style embedding
             style_emb = self.forward_style_embedding(style_tokens, style_emb, embed)
-            self._replace_at_seq_beginning(embed, src_lengths, style_emb)
+            embed = self._replace_at_seq_beginning(embed, src_lengths, style_emb)
 
         x = embed = self.embed_scale * embed
         if self.embed_positions is not None:
@@ -545,7 +546,7 @@ class TransformerEncoder(FairseqEncoder):
             x = torch.cat([x[0].unsqueeze(0), x], dim=0)
 
             x.transpose_(0, 1)
-            self._replace_at_seq_beginning(x, src_lengths, style_emb)
+            x = self._replace_at_seq_beginning(x, src_lengths, style_emb)
             x.transpose_(0, 1)
             # need to remove mask at style embedding positions
             encoder_padding_mask = self._insert_token_at_seq_beginning(encoder_padding_mask, src_lengths, True, False)
