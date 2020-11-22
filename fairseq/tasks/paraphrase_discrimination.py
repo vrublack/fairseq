@@ -90,7 +90,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
         """Load a given dataset split (e.g., train, valid, test)."""
 
         comps = {}
-        comp_names = ['sentences', 'phrases', 'paraphrases']
+        comp_names = ['anchor', 'positive', 'negative']
         for component in comp_names:
             comps[component] = data_utils.load_indexed_dataset(
                 osp.join(self.args.data, split, component),
@@ -103,20 +103,20 @@ class ParaphraseDiscriminationTask(FairseqTask):
             dataset = {
                 'id': IdDataset(),
                 'net_input1': {
-                    'src_tokens': RightPadDataset(comps['sentences'], pad_idx=self.source_dictionary.pad()),
-                    'src_lengths': NumelDataset(comps['sentences']),
-                    'aux_tokens': RightPadDataset(comps['phrases'], pad_idx=self.source_dictionary.pad()),
-                    'aux_lengths': NumelDataset(comps['phrases'])
+                    'src_tokens': RightPadDataset(comps['anchor'], pad_idx=self.source_dictionary.pad()),
+                    'src_lengths': NumelDataset(comps['anchor']),
+                    'aux_tokens': RightPadDataset(comps['positive'], pad_idx=self.source_dictionary.pad()),
+                    'aux_lengths': NumelDataset(comps['positive'])
                 },
                 'net_input2': {
-                    'src_tokens': RightPadDataset(comps['sentences'], pad_idx=self.source_dictionary.pad()),
-                    'src_lengths': NumelDataset(comps['sentences']),
-                    'aux_tokens': RightPadDataset(comps['paraphrases'], pad_idx=self.source_dictionary.pad()),
-                    'aux_lengths': NumelDataset(comps['paraphrases'])
+                    'src_tokens': RightPadDataset(comps['anchor'], pad_idx=self.source_dictionary.pad()),
+                    'src_lengths': NumelDataset(comps['anchor']),
+                    'aux_tokens': RightPadDataset(comps['negative'], pad_idx=self.source_dictionary.pad()),
+                    'aux_lengths': NumelDataset(comps['negative'])
                 },
-                'target': TensorDataset(torch.tensor([0] * len(comps['sentences']), dtype=torch.long)),
+                'target': TensorDataset(torch.tensor([0] * len(comps['anchor']), dtype=torch.long)),
                 'nsentences': NumSamplesDataset(),
-                'ntokens': NumelDataset(comps['sentences'], reduce=True),
+                'ntokens': NumelDataset(comps['anchor'], reduce=True),
             }
         else:
             dataset = {
@@ -124,22 +124,22 @@ class ParaphraseDiscriminationTask(FairseqTask):
                 'net_input': {
                 },
                 'anchor_tokens': RightPadDataset(
-                    comps['sentences'],
+                    comps['anchor'],
                     pad_idx=self.source_dictionary.pad(),
                 ),
                 'positive_tokens': RightPadDataset(
-                    comps['phrases'],
+                    comps['positive'],
                     pad_idx=self.source_dictionary.pad(),
                 ),
                 'negative_tokens': RightPadDataset(
-                    comps['paraphrases'],
+                    comps['negative'],
                     pad_idx=self.source_dictionary.pad(),
                 ),
-                'anchor_lengths': NumelDataset(comps['sentences']),
-                'positive_lengths': NumelDataset(comps['phrases']),
-                'negative_lengths': NumelDataset(comps['paraphrases']),
+                'anchor_lengths': NumelDataset(comps['anchor']),
+                'positive_lengths': NumelDataset(comps['positive']),
+                'negative_lengths': NumelDataset(comps['negative']),
                 'nsentences': NumSamplesDataset(),
-                'ntokens': NumelDataset(comps['sentences'], reduce=True),
+                'ntokens': NumelDataset(comps['anchor'], reduce=True),
             }
 
         dataset = NestedDictionaryDataset(
