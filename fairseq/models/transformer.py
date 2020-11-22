@@ -440,12 +440,12 @@ class TransformerEncoder(FairseqEncoder):
             if computed_style_shortcut:
                 style_embed = style_embed.repeat(bsize, 1)
 
-        style_embed = self.style_model_out_proj(style_embed)
-
         if self.style_embed_noise_stddev and self.training:
             noise = torch.randn_like(style_embed)
             # TODO multiplicate noise?
             style_embed = style_embed + noise * self.style_embed_noise_stddev
+
+        style_embed = self.style_model_out_proj(style_embed)
 
         # norm at the end so the final tensor is normalized to match the other embeddings
         if self.style_embed_norm is not None:
