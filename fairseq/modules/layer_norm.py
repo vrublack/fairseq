@@ -47,6 +47,8 @@ class TiedLayerNorm(nn.Module):
         denom = to_normalize.var(dim=0, unbiased=False).add(self.eps).sqrt()
         to_normalize = num.div(denom)
 
+        # don't propagate gradient into the other tensor
+        other = other.detach()
         to_normalize = to_normalize.mul(other.view(other.shape[0] * other.shape[1], -1).std(dim=0, unbiased=False))
         to_normalize = to_normalize.add(other.mean((0, 1)))
 
