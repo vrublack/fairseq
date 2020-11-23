@@ -184,6 +184,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='Concatenate style embeddings to encoder embeddings (encoder) or to encoder output (decoder)')
         parser.add_argument('--layernorm-style-embed', action='store_true', default=False,
                             help='Apply layer normalization to style embeddings')
+        parser.add_argument('--style-embedding-average-k', type=int, default=-1,
+                            help='Average style embedding over this many samples during training')
         # fmt: on
 
     @classmethod
@@ -393,6 +395,7 @@ class TransformerEncoder(FairseqEncoder):
         self.tgt_dict = tgt_dict
 
         self.style_embed_position = args.style_embed_position
+        self.style_embedding_average_k = args.style_embedding_average_k
 
     def set_style_model(self, model, style_embed_dim):
         self.style_model = model
@@ -439,6 +442,28 @@ class TransformerEncoder(FairseqEncoder):
 
             if computed_style_shortcut:
                 style_embed = style_embed.repeat(bsize, 1)
+
+        if self.training and self.style_embedding_average_k != -1:
+            def average_every_k(t, k):
+                assert t.shape[0] % k == 0
+
+                t_avg = t.view(k, t.shape[0] // k, -1)
+                t_avg = t_avg.mean(dim=0, keepdim=True)
+                t_avg = t_avg.repeat((k, 1, 1))
+                t_avg = t_avg.view_as(t)
+                return t_avg
+
+            bsize = other_emb.shape[0]
+            average_k = min(self.style_embedding_average_k, bsize)
+            average_k_rem = bsize % average_k
+
+            if average_k_rem != 0:
+                # if not divisible, split up into one tensor that can be averaged normally and a remainder tensor
+                average_main_tensor = average_every_k(style_embed[:-average_k_rem], average_k)
+                average_rem_tensor = average_every_k(style_embed[-average_k_rem:], average_k_rem)
+                style_embed = torch.cat((average_main_tensor, average_rem_tensor))
+            else:
+                style_embed = average_every_k(style_embed, average_k)
 
         if self.style_embed_noise_stddev and self.training:
             noise = torch.randn_like(style_embed)
@@ -1079,6 +1104,8 @@ def base_architecture(args):
     args.tie_adaptive_weights = getattr(args, "tie_adaptive_weights", False)
 
     args.style_embed_dropout = getattr(args, "style_embed_dropout", 0.1)
+
+    args.style_embedding_average_k = getattr(args, "style_embedding_average_k", -1)
 
 
 @register_model_architecture("transformer", "transformer_iwslt_de_en")
