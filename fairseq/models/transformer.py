@@ -443,19 +443,21 @@ class TransformerEncoder(FairseqEncoder):
             if computed_style_shortcut:
                 style_embed = style_embed.repeat(bsize, 1)
 
+        assert other_emb.shape[0] == style_embed.shape[0], f'Batch size {other_emb.shape[0]} vs {style_embed.shape[0]}'
+
         if self.training and self.style_embedding_average_k != -1:
+            bsize = other_emb.shape[0]
+            average_k = min(self.style_embedding_average_k, bsize)
+            average_k_rem = bsize % average_k
+
             def average_every_k(t, k):
-                assert t.shape[0] % k == 0, f'{t.shape[0]} % {k} != 0'
+                assert t.shape[0] % k == 0, f'{t.shape[0]} % {k} != 0 (bsize={bsize})'
 
                 t_avg = t.view(k, t.shape[0] // k, -1)
                 t_avg = t_avg.mean(dim=0, keepdim=True)
                 t_avg = t_avg.repeat((k, 1, 1))
                 t_avg = t_avg.view_as(t)
                 return t_avg
-
-            bsize = other_emb.shape[0]
-            average_k = min(self.style_embedding_average_k, bsize)
-            average_k_rem = bsize % average_k
 
             if average_k_rem != 0:
                 # if not divisible, split up into one tensor that can be averaged normally and a remainder tensor
