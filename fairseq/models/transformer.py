@@ -445,7 +445,7 @@ class TransformerEncoder(FairseqEncoder):
 
         if self.training and self.style_embedding_average_k != -1:
             def average_every_k(t, k):
-                assert t.shape[0] % k == 0
+                assert t.shape[0] % k == 0, f'{t.shape[0]} % {k} != 0'
 
                 t_avg = t.view(k, t.shape[0] // k, -1)
                 t_avg = t_avg.mean(dim=0, keepdim=True)
