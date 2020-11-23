@@ -460,7 +460,7 @@ class TransformerEncoder(FairseqEncoder):
             if average_k_rem != 0:
                 # if not divisible, split up into one tensor that can be averaged normally and a remainder tensor
                 average_main_tensor = average_every_k(style_embed[:-average_k_rem], average_k)
-                average_rem_tensor = average_every_k(style_embed[-average_k_rem:], average_k_rem)
+                average_rem_tensor = average_every_k(style_embed[-average_k_rem:], average_k - average_k_rem)
                 style_embed = torch.cat((average_main_tensor, average_rem_tensor))
             else:
                 style_embed = average_every_k(style_embed, average_k)
