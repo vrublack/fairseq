@@ -49,7 +49,7 @@ class TiedLayerNorm(nn.Module):
 
         # don't propagate gradient into the other tensor
         other = other.detach()
-        to_normalize = to_normalize.mul(other.view(other.shape[0] * other.shape[1], -1).std(dim=0, unbiased=False))
+        to_normalize = to_normalize.mul(other.reshape(other.shape[0] * other.shape[1], -1).std(dim=0, unbiased=False))
         to_normalize = to_normalize.add(other.mean((0, 1)))
 
         return to_normalize

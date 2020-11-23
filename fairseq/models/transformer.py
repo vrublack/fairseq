@@ -564,17 +564,15 @@ class TransformerEncoder(FairseqEncoder):
         if self.layer_norm is not None:
             x = self.layer_norm(x)
 
-        if  (style_tokens is not None or style_emb is not None) and self.style_embed_position == 'decoder':
+        if (style_tokens is not None or style_emb is not None) and self.style_embed_position == 'decoder':
             assert not src_tokens[:, -1].eq(self.tgt_dict.pad()).any(), \
                 "Only accepts padding on the left side"
 
             src_lengths = src_lengths.add(1)
-            style_emb = self.forward_style_embedding(style_tokens, style_emb, x)
+            style_emb = self.forward_style_embedding(style_tokens, style_emb, x.transpose(0, 1))
             x = torch.cat([x[0].unsqueeze(0), x], dim=0)
 
-            x.transpose_(0, 1)
-            x = self._replace_at_seq_beginning(x, src_lengths, style_emb)
-            x.transpose_(0, 1)
+            x = self._replace_at_seq_beginning(x.transpose(0, 1), src_lengths, style_emb).transpose(0, 1)
             # need to remove mask at style embedding positions
             encoder_padding_mask = self._insert_token_at_seq_beginning(encoder_padding_mask, src_lengths, True, False)
 
