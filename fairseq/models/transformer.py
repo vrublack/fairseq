@@ -176,6 +176,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         # style args
         parser.add_argument('--style-embed-dropout', type=float,
                             help='Probability of zeroing out the complete style embedding')
+        parser.add_argument('--style-embed-dim-dropout', type=float,
+                            help='Probability of zeroing out individual dimensions of the style embedding')
         parser.add_argument('--style-embed-dropout-inference', action='store_true', default=False,
                             help='If the style embedding dropout should also be applied during inference')
         parser.add_argument('--style-embed-noise-stddev', type=float, default=0,
@@ -339,8 +341,10 @@ class TransformerEncoder(FairseqEncoder):
 
         self.embed_tokens = embed_tokens
         self.style_embed_dropout = FairseqDropout(args.style_embed_dropout)
+        self.style_embed_dim_dropout = FairseqDropout(args.style_embed_dim_dropout)
         if args.style_embed_dropout_inference:
             self.style_embed_dropout.apply_during_inference = True
+            self.style_embed_dim_dropout.apply_during_inference = True
         self.style_embed_noise_stddev = args.style_embed_noise_stddev
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(self.embed_dim)
@@ -482,6 +486,8 @@ class TransformerEncoder(FairseqEncoder):
             style_embed = style_embed + noise * self.style_embed_noise_stddev
 
         style_embed = self.style_model_out_proj(style_embed)
+
+        style_embed = self.style_embed_dim_dropout(style_embed)
 
         # norm at the end so the final tensor is normalized to match the other embeddings
         if self.style_embed_norm is not None:
@@ -1113,6 +1119,7 @@ def base_architecture(args):
     args.tie_adaptive_weights = getattr(args, "tie_adaptive_weights", False)
 
     args.style_embed_dropout = getattr(args, "style_embed_dropout", 0.1)
+    args.style_embed_dim_dropout = getattr(args, "style_embed_dim_dropout", 0.0)
 
     args.style_embedding_average_k = getattr(args, "style_embedding_average_k", -1)
 
