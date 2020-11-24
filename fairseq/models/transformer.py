@@ -405,15 +405,26 @@ class TransformerEncoder(FairseqEncoder):
         return TransformerEncoderLayer(args)
 
     def forward_style_embedding(self, style_tokens, style_embed, other_emb):
+        def average_every_k(t, k):
+            assert t.shape[0] % k == 0, f'{t.shape[0]} % {k} != 0'
+
+            t_avg = t.view(k, t.shape[0] // k, -1)
+            t_avg = t_avg.mean(dim=0, keepdim=True)
+            t_avg = t_avg.repeat((k, 1, 1))
+            t_avg = t_avg.view_as(t)
+            return t_avg
+
+        bsize = other_emb.shape[0]
+
         # randomly assign empty style sequence to all style sequences of a sample
         # if dropout it active during inference, computed_style_shortcut can't be done any more, but dropout during
         # inference is only for debugging/baseline so it's fine
-        assert not self.training or style_embed is None or self.args.style_embed_dropout == 0, \
-            "Style embed dropout not yet implemented for supplied style embeddings"
+
+        has_supplied_emb = style_embed is not None
 
         # if style embedding isn't supplied, compute it
-        if style_embed is None:
-            bsize, style_n, style_seq_len = style_tokens.shape
+        if not has_supplied_emb:
+            _, style_n, style_seq_len = style_tokens.shape
 
             dummy_ones = style_tokens.new_ones((bsize, 1), dtype=torch.float32)
             whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
@@ -446,18 +457,8 @@ class TransformerEncoder(FairseqEncoder):
         assert other_emb.shape[0] == style_embed.shape[0], f'Batch size {other_emb.shape[0]} vs {style_embed.shape[0]}'
 
         if self.training and self.style_embedding_average_k != -1:
-            bsize = other_emb.shape[0]
             average_k = min(self.style_embedding_average_k, bsize)
             average_k_rem = bsize % average_k
-
-            def average_every_k(t, k):
-                assert t.shape[0] % k == 0, f'{t.shape[0]} % {k} != 0 (bsize={bsize})'
-
-                t_avg = t.view(k, t.shape[0] // k, -1)
-                t_avg = t_avg.mean(dim=0, keepdim=True)
-                t_avg = t_avg.repeat((k, 1, 1))
-                t_avg = t_avg.view_as(t)
-                return t_avg
 
             if average_k_rem != 0:
                 # if not divisible, split up into one tensor that can be averaged normally and a remainder tensor
@@ -466,6 +467,14 @@ class TransformerEncoder(FairseqEncoder):
                 style_embed = torch.cat((average_main_tensor, average_rem_tensor))
             else:
                 style_embed = average_every_k(style_embed, average_k)
+
+        if has_supplied_emb:
+            # dropout for supplied embedding
+            # TODO maybe don't have separate dropout for supplied and non-supplied embeddings
+            dummy_ones = style_embed.new_ones((bsize,), dtype=torch.float32)
+            whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
+            avg_batch_style_emb = style_embed.mean(dim=0)
+            style_embed[whole_sample_dropout_mask] = avg_batch_style_emb
 
         if self.style_embed_noise_stddev and self.training:
             noise = torch.randn_like(style_embed)
