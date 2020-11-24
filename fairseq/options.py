@@ -322,6 +322,8 @@ def add_preprocess_args(parser):
                        help="Precomputed torch tensors to indicate style. It should have the shape (dateset length, dim)")
     group.add_argument("--testpref-style-embeddings", default=None,
                        help="Precomputed torch tensors to indicate style. It should have the shape (dateset length, dim)")
+    group.add_argument("--trainpref-style-embeddings", default=None,
+                       help="Precomputed torch tensors to indicate style. It should have the shape (dateset length, dim)")
     group.add_argument("--destdir", metavar="DIR", default="data-bin",
                        help="destination dir")
     group.add_argument("--thresholdtgt", metavar="N", default=0, type=int,
