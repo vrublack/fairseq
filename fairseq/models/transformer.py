@@ -176,6 +176,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
         # style args
         parser.add_argument('--style-embed-dropout', type=float,
                             help='Probability of zeroing out the complete style embedding')
+        parser.add_argument('--style-embed-avg-dropout', type=float,
+                            help='Probability of setting a style embedding to the average of all style embeddings in batch')
         parser.add_argument('--style-embed-dim-dropout', type=float,
                             help='Probability of zeroing out individual dimensions of the style embedding')
         parser.add_argument('--style-embed-dropout-inference', action='store_true', default=False,
@@ -340,8 +342,9 @@ class TransformerEncoder(FairseqEncoder):
         self.max_source_positions = args.max_source_positions
 
         self.embed_tokens = embed_tokens
-        self.style_embed_dropout = FairseqDropout(args.style_embed_dropout)
-        self.style_embed_dim_dropout = FairseqDropout(args.style_embed_dim_dropout)
+        self.style_embed_dropout = FairseqDropout(args.style_embed_dropout) if args.style_embed_dropout else None
+        self.style_embed_dim_dropout = FairseqDropout(args.style_embed_dim_dropout) if args.style_embed_dim_dropout else None
+        self.style_embed_avg_dropout = FairseqDropout(args.style_embed_avg_dropout) if args.style_embed_avg_dropout else None
         if args.style_embed_dropout_inference:
             self.style_embed_dropout.apply_during_inference = True
             self.style_embed_dim_dropout.apply_during_inference = True
@@ -408,7 +411,10 @@ class TransformerEncoder(FairseqEncoder):
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
-    def forward_style_embedding(self, style_tokens, style_embed, other_emb):
+    def forward_style_embedding(self, style_tokens: torch.Tensor, style_embed: torch.Tensor, other_emb: torch.Tensor):
+        bsize = other_emb.shape[0]
+        has_supplied_emb = style_embed is not None
+
         def average_every_k(t, k):
             assert t.shape[0] % k == 0, f'{t.shape[0]} % {k} != 0'
 
@@ -418,13 +424,14 @@ class TransformerEncoder(FairseqEncoder):
             t_avg = t_avg.view_as(t)
             return t_avg
 
-        bsize = other_emb.shape[0]
+        def random_assign(dropout, t, other):
+            dummy_ones = other_emb.new_ones((bsize,), dtype=torch.float32)
+            whole_sample_dropout_mask = dropout(dummy_ones).eq(0)
+            t[whole_sample_dropout_mask] = other
 
-        # randomly assign empty style sequence to all style sequences of a sample
-        # if dropout it active during inference, computed_style_shortcut can't be done any more, but dropout during
-        # inference is only for debugging/baseline so it's fine
-
-        has_supplied_emb = style_embed is not None
+        if has_supplied_emb:
+            # clone so modifications (e.g. style embedding dropout) aren't reflected in the dataset
+            style_embed = style_embed.clone()
 
         # if style embedding isn't supplied, compute it
         if not has_supplied_emb:
@@ -432,6 +439,9 @@ class TransformerEncoder(FairseqEncoder):
 
             style_padding_mask = ~style_tokens.eq(self.tgt_dict.pad())
             style_lens = torch.sum(style_padding_mask, dim=-1)
+
+            # if dropout it active during inference, computed_style_shortcut can't be done any more, but dropout during
+            # inference is only for debugging/baseline so it's fine
 
             # compute only once if all samples have the same style sequences
             unique_samples = torch.unique_consecutive(style_tokens, dim=0)
@@ -452,9 +462,19 @@ class TransformerEncoder(FairseqEncoder):
             if computed_style_shortcut:
                 style_embed = style_embed.repeat(bsize, 1)
 
-        assert other_emb.shape[0] == style_embed.shape[0], f'Batch size {other_emb.shape[0]} vs {style_embed.shape[0]}'
+        elif self.style_embed_dropout:
+            assert self.style_model is not None, "Need style model to compute empty style embedding"
+
+            empty_seq = other_emb.new_tensor([[self.tgt_dict.eos()]], dtype=torch.long)
+            style_lens = other_emb.new_tensor([1], dtype=torch.long)
+            empty_style_emb = self.style_model(empty_seq, style_lens)[0]
+            random_assign(self.style_embed_dropout, style_embed, empty_style_emb)
+
+        if self.style_embed_avg_dropout:
+            random_assign(self.style_embed_avg_dropout, style_embed, style_embed.mean(dim=0))
 
         if self.training and self.style_embedding_average_k != -1:
+            # TODO before style embedding dropout?
             average_k = min(self.style_embedding_average_k, bsize)
             average_k_rem = bsize % average_k
 
@@ -479,7 +499,8 @@ class TransformerEncoder(FairseqEncoder):
 
         style_embed = self.style_model_out_proj(style_embed)
 
-        style_embed = self.style_embed_dim_dropout(style_embed)
+        if self.style_embed_dim_dropout:
+            style_embed = self.style_embed_dim_dropout(style_embed)
 
         # norm at the end so the final tensor is normalized to match the other embeddings
         if self.style_embed_norm is not None:
@@ -1112,6 +1133,7 @@ def base_architecture(args):
 
     args.style_embed_dropout = getattr(args, "style_embed_dropout", 0.1)
     args.style_embed_dim_dropout = getattr(args, "style_embed_dim_dropout", 0.0)
+    args.style_embed_avg_dropout = getattr(args, "style_embed_avg_dropout", 0.0)
 
     args.style_embedding_average_k = getattr(args, "style_embedding_average_k", -1)
 
