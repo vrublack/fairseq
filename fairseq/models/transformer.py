@@ -437,6 +437,14 @@ class TransformerEncoder(FairseqEncoder):
         if not has_supplied_emb:
             _, style_n, style_seq_len = style_tokens.shape
 
+            if self.style_embed_dropout:
+                # randomly assign empty style sequence to all style sequences of a sample
+                dummy_ones = style_tokens.new_ones((bsize, 1), dtype=torch.float32)
+                whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
+                empty_seq = style_tokens.new_tensor([self.tgt_dict.eos()] + [self.tgt_dict.pad()] * (style_seq_len - 1))
+                style_tokens = style_tokens.masked_scatter(whole_sample_dropout_mask.unsqueeze(2).expand(-1, style_n, style_seq_len),
+                                            empty_seq.view(1, 1, -1).expand(bsize, style_n, -1))
+
             style_padding_mask = ~style_tokens.eq(self.tgt_dict.pad())
             style_lens = torch.sum(style_padding_mask, dim=-1)
 
@@ -485,12 +493,6 @@ class TransformerEncoder(FairseqEncoder):
                 style_embed = torch.cat((average_main_tensor, average_rem_tensor))
             else:
                 style_embed = average_every_k(style_embed, average_k)
-
-        # "Dropout": average style embedding over whole batch so that each individual one plays in insignificant role
-        dummy_ones = style_embed.new_ones((bsize,), dtype=torch.float32)
-        whole_sample_dropout_mask = self.style_embed_dropout(dummy_ones).eq(0)
-        avg_batch_style_emb = style_embed.mean(dim=0)
-        style_embed[whole_sample_dropout_mask] = avg_batch_style_emb
 
         if self.style_embed_noise_stddev and self.training:
             noise = torch.randn_like(style_embed)
