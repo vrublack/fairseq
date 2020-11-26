@@ -205,6 +205,9 @@ class TranslationWithStyleTask(FairseqTask):
         # options for style
         parser.add_argument('--style-embed-model', type=str, metavar='STR', required=False,
                             help='path to model used to generate style embeddings')
+        parser.add_argument('--style-model-overrides', default="{}", type=str, metavar='DICT',
+                            help='A dictionary used to override style model args')
+
         # fmt: on
 
     def __init__(self, args, src_dict, tgt_dict):
@@ -268,6 +271,29 @@ class TranslationWithStyleTask(FairseqTask):
     def build_dataset_for_inference(self, src_tokens, src_lengths):
         return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary, condition_style=True)
 
+    def load_style_model(self, args):
+        style_checkpoint = checkpoint_utils.load_checkpoint_to_cpu(args.style_embed_model)
+
+        # swapping src and tgt dict as a hack to get the style model to have the embedding size from the target dictionary
+        self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
+        style_args = style_checkpoint['args']
+        style_args.__dict__.update(eval(args.style_model_overrides))
+        style_model = super().build_model(style_args)
+        self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
+
+        style_model.set_sequence_embedding_head()
+        assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[
+                   0] == style_model.encoder.embed_tokens.num_embeddings, \
+            "Style model needs to have the same vocabulary and embedding size"
+        # load weights without classification head that was potentially saved
+        style_model.load_state_dict(style_checkpoint['model'], strict=False)
+
+        # make style model non-trainable
+        for param in style_model.parameters():
+            param.requires_grad = False
+
+        return style_model
+
     def build_model(self, args):
         assert ARCH_MODEL_REGISTRY[args.arch] == TransformerModel, \
             f'Style embedding only implemented for transformer so far, not for {ARCH_MODEL_REGISTRY[args.arch]}'
@@ -289,24 +315,7 @@ class TranslationWithStyleTask(FairseqTask):
             self.sequence_generator = self.build_generator([model], Namespace(**gen_args))
 
         if args.style_embed_model:
-            style_checkpoint = checkpoint_utils.load_checkpoint_to_cpu(args.style_embed_model)
-
-            # swapping src and tgt dict as a hack to get the style model to have the embedding size from the target dictionary
-            self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
-            style_model = super().build_model(style_checkpoint['args'])
-            self.src_dict, self.tgt_dict = self.tgt_dict, self.src_dict
-
-            style_model.set_sequence_embedding_head()
-            assert style_checkpoint['model']['encoder.embed_tokens.weight'].shape[
-                       0] == style_model.encoder.embed_tokens.num_embeddings, \
-                "Style model needs to have the same vocabulary and embedding size"
-            # load weights without classification head that was potentially saved
-            style_model.load_state_dict(style_checkpoint['model'], strict=False)
-
-            # make style model non-trainable
-            for param in style_model.parameters():
-                param.requires_grad = False
-
+            style_model = self.load_style_model(args)
             model.set_style_model(style_model, style_model.encoder.hidden_size)
 
         return model

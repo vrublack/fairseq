@@ -23,6 +23,7 @@ from fairseq.data import (
     StripTokenDataset,
     TruncateDataset,
 )
+from fairseq.models.lstm import LSTMEncoderModel
 
 from fairseq.tasks import FairseqTask, register_task
 
@@ -204,6 +205,8 @@ class TranslationTask(FairseqTask):
                                  'e.g., \'{"beam": 4, "lenpen": 0.6}\'')
         parser.add_argument('--eval-bleu-print-samples', action='store_true',
                             help='print sample generations during validation')
+
+        parser.add_argument('--headless', action='store_true', default=False)
         # fmt: on
 
     def __init__(self, args, src_dict, tgt_dict):
@@ -392,3 +395,13 @@ class TranslationTask(FairseqTask):
             return sacrebleu.corpus_bleu(hyps, [refs], tokenize='none')
         else:
             return sacrebleu.corpus_bleu(hyps, [refs])
+
+    def extract_sequence_embeddings_step(self, sample, model):
+        if not isinstance(model, LSTMEncoderModel):
+            raise NotImplementedError("Extract embeddings only supported for LSTMModel for now")
+
+        if model.sequence_embedding_head is None:
+            model.set_sequence_embedding_head()
+        # average over lstm layers
+        return model(**sample['net_input'])
+

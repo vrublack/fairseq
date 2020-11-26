@@ -64,28 +64,27 @@ class LSTMClassificationHead(nn.Module):
 class LSTMSequenceEmbeddingHead(nn.Module):
     def __init__(self, reduction):
         super().__init__()
-        if reduction == 'mean':
-            self.average = True
-        elif reduction == 'max':
-            self.average = False
-        else:
-            raise NotImplementedError('Unknown reduction operation ' + str(reduction))
+        self.reduction = reduction
 
-    def forward(self, x, encoder_padding_mask):
-        """
-
-        :param x: seq_len x batch x hidden
-        :param encoder_padding_mask: seq_len x batch
-        :return:
-        """
+    def forward(self, encoder_out):
+        encoder_outs = encoder_out[0]
+        encoder_hiddens = encoder_out[1]
+        encoder_cells = encoder_out[2]
+        encoder_padding_mask = encoder_out[3]
 
         seq_mask = ~encoder_padding_mask
         seq_lens = torch.sum(seq_mask, dim=0)
-        if self.average:
-            return torch.sum(seq_mask[:, :, None] * x, dim=0) / seq_lens[:, None]
+        if self.reduction == 'mean':
+            return torch.sum(seq_mask[:, :, None] * encoder_outs, dim=0) / seq_lens[:, None]
+        elif self.reduction == 'max':
+            encoder_outs.masked_fill_(encoder_padding_mask[:, :, None], -float('inf'))
+            return torch.max(encoder_outs, dim=0)[0]
+        elif self.reduction == 'last':
+            # average over lstm layers
+            return encoder_hiddens.mean(dim=0)
         else:
-            x.masked_fill_(encoder_padding_mask[:, :, None], -float('inf'))
-            return torch.max(x, dim=0)[0]
+            raise NotImplementedError('Unknown reduction operation ' + str(self.reduction))
+
 
 
 @register_model('lstm')
@@ -371,20 +370,16 @@ class LSTMEncoderModel(FairseqEncoderModel):
         classification_head_name=None,   # ignored
         features_only=False
     ):
-        # fixes CUDA error: an illegal memory access was encountered
-        # TODO better solution
-        torch.backends.cudnn.deterministic = True
-
         x = self.encoder(src_tokens, src_lengths=src_lengths, enforce_sorted=False)
 
         if self.sequence_embedding_head is not None:
-            x = self.sequence_embedding_head(x[0], x[3])
+            x = self.sequence_embedding_head(x)
 
         if aux_tokens is not None and CLASSIFICATION_HEAD_RANKING in self.classification_heads:
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
 
             x_aux = self.encoder(aux_tokens, src_lengths=aux_lengths, enforce_sorted=False)
-            x_aux = self.sequence_embedding_head(x_aux[0], x_aux[3])
+            x_aux = self.sequence_embedding_head(x_aux)
             # combine main and auxiliary embeddings
             x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](torch.cat((x, x_aux), dim=1))
             # add dummy because the sentence ranking loss expects this
@@ -453,6 +448,11 @@ class LSTMEncoder(FairseqEncoder):
                 decreasing order. If False, this condition is not
                 required. Default: True.
         """
+
+        # fixes CUDA error: an illegal memory access was encountered
+        # TODO better solution
+        torch.backends.cudnn.deterministic = True
+
         if self.left_pad:
             # nn.utils.rnn.pack_padded_sequence requires right-padding;
             # convert left-padding to right-padding

@@ -47,6 +47,7 @@ def get_extraction_parser(interactive=False, default_task="translation"):
         add_interactive_args(parser)
     group = parser.add_argument_group("Extraction")
     add_common_eval_args(group)
+    add_extraction_args(parser)
     return parser
 
 
@@ -669,6 +670,11 @@ def add_generation_args(parser):
     group.add_argument('--decoding-format', default=None, type=str, choices=['unigram', 'ensemble', 'vote', 'dp', 'bs'])
     # fmt: on
     return group
+
+
+def add_extraction_args(parser):
+    group = parser.add_argument_group("Extraction")
+    group.add_argument('--strict-loading', type=int, default=1)
 
 
 def add_interactive_args(parser):

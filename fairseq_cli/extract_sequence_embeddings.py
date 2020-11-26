@@ -89,6 +89,7 @@ def main(args):
         arg_overrides=eval(args.model_overrides),
         task=task,
         suffix=getattr(args, "checkpoint_suffix", ""),
+        strict=bool(args.strict_loading)
     )
     model = model[0]
 
