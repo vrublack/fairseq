@@ -81,7 +81,7 @@ class LSTMSequenceEmbeddingHead(nn.Module):
             return torch.max(encoder_outs, dim=0)[0]
         elif self.reduction == 'last':
             # average over lstm layers
-            return encoder_hiddens.mean(dim=0)
+            return encoder_hiddens.mean(dim=0) * 0.5 + encoder_cells.mean(dim=0) * 0.5
         else:
             raise NotImplementedError('Unknown reduction operation ' + str(self.reduction))
 
