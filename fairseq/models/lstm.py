@@ -80,8 +80,8 @@ class LSTMSequenceEmbeddingHead(nn.Module):
             encoder_outs.masked_fill_(encoder_padding_mask[:, :, None], -float('inf'))
             return torch.max(encoder_outs, dim=0)[0]
         elif self.reduction == 'last':
-            # average over lstm layers
-            return encoder_hiddens.mean(dim=0) * 0.5 + encoder_cells.mean(dim=0) * 0.5
+            # like in "Deep Sentence Embedding Using Long Short-Term Memory Networks: Analysis and Application to Information Retrieval"
+            return encoder_hiddens.mean(dim=0)
         else:
             raise NotImplementedError('Unknown reduction operation ' + str(self.reduction))
 
