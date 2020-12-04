@@ -111,16 +111,19 @@ class BOWEncoderModel(FairseqEncoderModel):
             classification_head_name=None,  # ignored
             features_only=False
     ):
+        def reorder_encoder_out(out, pad_mask):
+            return out, None, None, pad_mask
+
         x, padding_mask = self.encoder(src_tokens, src_lengths=src_lengths)
 
         if self.sequence_embedding_head is not None:
-            x = self.sequence_embedding_head(x, padding_mask)
+            x = self.sequence_embedding_head(reorder_encoder_out(x, padding_mask))
 
         if aux_tokens is not None and CLASSIFICATION_HEAD_RANKING in self.classification_heads:
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
 
             x_aux, padding_mask_aux = self.encoder(aux_tokens, src_lengths=aux_lengths)
-            x_aux = self.sequence_embedding_head(x_aux, padding_mask_aux)
+            x_aux = self.sequence_embedding_head(reorder_encoder_out(x_aux, padding_mask_aux))
             # combine main and auxiliary embeddings
             x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](torch.cat((x, x_aux), dim=1))
             # add dummy because the sentence ranking loss expects this
