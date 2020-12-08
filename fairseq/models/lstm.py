@@ -292,7 +292,7 @@ class LSTMEncoderModel(FairseqEncoderModel):
         parser.add_argument('--encoder-dropout-out', type=float, metavar='D',
                             help='dropout probability for encoder output')
         
-        parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max'],
+        parser.add_argument('--seq-embedding-reduction', default='max', choices=['mean', 'max', 'last'],
                             help='How to combine the seq length dimension of the model output')
         parser.add_argument('--classification-head-hidden', type=int,
                             help='hidden dimension in classification head or -1 to have no inner layer at all')
