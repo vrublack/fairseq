@@ -8,7 +8,7 @@ from fairseq.models import (
     register_model,
     register_model_architecture, FairseqEncoderModel,
 )
-from fairseq.models.lstm import Embedding, LSTMSequenceEmbeddingHead, LSTMClassificationHead
+from fairseq.models.lstm import Embedding, LSTMSequenceEmbeddingHead, LSTMClassificationHead, LSTMInnerProdSimilarityHead, LSTMLearnedSimilarityHead
 from fairseq.modules import FairseqDropout
 
 DEFAULT_MAX_POSITIONS = 1e5
@@ -45,6 +45,7 @@ class BOWEncoderModel(FairseqEncoderModel):
                             help='How to combine the seq length dimension of the model output')
         parser.add_argument('--classification-head-hidden', type=int,
                             help='hidden dimension in classification head or -1 to have no inner layer at all')
+        parser.add_argument('--classification-head-type', type=str, choices=['learned', 'dot'], default='learned')
         # fmt: on
 
     @classmethod
@@ -86,9 +87,11 @@ class BOWEncoderModel(FairseqEncoderModel):
 
     def register_classification_head(self, name, num_classes=None, inner_dim=None, **kwargs):
         if name == CLASSIFICATION_HEAD_RANKING:
-            self.classification_heads[name] = \
-                LSTMClassificationHead(2 * self.args.encoder_embed_dim, self.args.classification_head_hidden,
-                                       1, 'relu', self.args.dropout)
+            if self.args.classification_head_type == 'dot':
+                self.classification_heads[name] = LSTMInnerProdSimilarityHead()
+            else:
+                self.classification_heads[name] = \
+                    LSTMLearnedSimilarityHead(self.args.encoder_embed_dim, self.args.classification_head_hidden, 'relu', self.args.dropout)
         elif name == CLASSIFICATION_HEAD_STANDARD:
             self.classification_heads[name] = \
                 LSTMClassificationHead(self.args.encoder_embed_dim, self.args.classification_head_hidden,
@@ -125,7 +128,7 @@ class BOWEncoderModel(FairseqEncoderModel):
             x_aux, padding_mask_aux = self.encoder(aux_tokens, src_lengths=aux_lengths)
             x_aux = self.sequence_embedding_head(reorder_encoder_out(x_aux, padding_mask_aux))
             # combine main and auxiliary embeddings
-            x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](torch.cat((x, x_aux), dim=1))
+            x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](x, x_aux)
             # add dummy because the sentence ranking loss expects this
             x = x, None
         elif CLASSIFICATION_HEAD_STANDARD in self.classification_heads:
@@ -186,3 +189,4 @@ def base_architecture(args):
     args.encoder_embed_path = getattr(args, 'encoder_embed_path', None)
     args.freeze_embed = getattr(args, 'freeze_embed', False)
     args.classification_head_hidden = getattr(args, 'classification_head_hidden', args.encoder_embed_dim)
+    args.classification_head_type = getattr(args, 'classification_head_type', 'learned')

@@ -61,6 +61,50 @@ class LSTMClassificationHead(nn.Module):
         return x
 
 
+class LSTMLearnedSimilarityHead(nn.Module):
+    """Head to assign a similarity score to two embeddings."""
+
+    def __init__(
+        self,
+        input_dim,
+        inner_dim,
+        activation_fn,
+        pooler_dropout
+    ):
+        super().__init__()
+
+        if inner_dim == -1:
+            # no inner
+            inner_dim = input_dim * 2
+            self.dense = None
+        else:
+            self.dense = nn.Linear(input_dim * 2, inner_dim)
+            self.activation_fn = utils.get_activation_fn(activation_fn)
+
+        self.dropout = nn.Dropout(p=pooler_dropout)
+        self.out_proj = nn.Linear(inner_dim, 1)
+
+    def forward(self, x1, x2, **kwargs):
+        x = torch.cat((x1, x2), dim=1)
+        if self.dense is not None:
+            x = self.dropout(x)
+            x = self.dense(x)
+            x = self.activation_fn(x)
+        x = self.dropout(x)
+        x = self.out_proj(x)
+        return x
+
+
+class LSTMInnerProdSimilarityHead(nn.Module):
+    """
+        Head to assign a similarity score to two embeddings with a simple inner product (cosine similarity without normalization)
+        as suggested in "AN EFFICIENT FRAMEWORK FOR LEARNING SENTENCE REPRESENTATIONS"
+    """
+
+    def forward(self, x1, x2, **kwargs):
+        return (x1 * x2).sum(-1, keepdim=True)
+
+
 class LSTMSequenceEmbeddingHead(nn.Module):
     def __init__(self, reduction):
         super().__init__()
@@ -296,6 +340,7 @@ class LSTMEncoderModel(FairseqEncoderModel):
                             help='How to combine the seq length dimension of the model output')
         parser.add_argument('--classification-head-hidden', type=int,
                             help='hidden dimension in classification head or -1 to have no inner layer at all')
+        parser.add_argument('--classification-head-type', type=str, choices=['learned', 'dot'], default='learned')
 
         # fmt: on
 
@@ -345,9 +390,11 @@ class LSTMEncoderModel(FairseqEncoderModel):
 
     def register_classification_head(self, name, num_classes=None, inner_dim=None, **kwargs):
         if name == CLASSIFICATION_HEAD_RANKING:
-            self.classification_heads[name] = \
-                LSTMClassificationHead(2 * self.args.encoder_hidden_size, self.args.classification_head_hidden,
-                                       1, 'relu', self.args.encoder_dropout_out)
+            if self.args.classification_head_type == 'dot':
+                self.classification_heads[name] = LSTMInnerProdSimilarityHead()
+            else:
+                self.classification_heads[name] = \
+                    LSTMLearnedSimilarityHead(self.args.encoder_hidden_size, self.args.classification_head_hidden, 'relu', self.args.encoder_dropout_out)
         elif name == CLASSIFICATION_HEAD_STANDARD:
             self.classification_heads[name] = \
                 LSTMClassificationHead(self.args.encoder_hidden_size, self.args.classification_head_hidden,
@@ -380,8 +427,7 @@ class LSTMEncoderModel(FairseqEncoderModel):
 
             x_aux = self.encoder(aux_tokens, src_lengths=aux_lengths, enforce_sorted=False)
             x_aux = self.sequence_embedding_head(x_aux)
-            # combine main and auxiliary embeddings
-            x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](torch.cat((x, x_aux), dim=1))
+            x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](x, x_aux)
             # add dummy because the sentence ranking loss expects this
             x = x, None
         elif CLASSIFICATION_HEAD_STANDARD in self.classification_heads:
@@ -898,3 +944,4 @@ def base_architecture_encoder(args):
     args.encoder_dropout_in = getattr(args, 'encoder_dropout_in', args.dropout)
     args.encoder_dropout_out = getattr(args, 'encoder_dropout_out', args.dropout)
     args.classification_head_hidden = getattr(args, 'classification_head_hidden', args.encoder_hidden_size)
+    args.classification_head_type = getattr(args, 'classification_head_type', 'learned')
