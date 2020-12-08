@@ -2,6 +2,7 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+import copy
 
 import torch
 import torch.nn as nn
@@ -341,6 +342,7 @@ class LSTMEncoderModel(FairseqEncoderModel):
         parser.add_argument('--classification-head-hidden', type=int,
                             help='hidden dimension in classification head or -1 to have no inner layer at all')
         parser.add_argument('--classification-head-type', type=str, choices=['learned', 'dot'], default='learned')
+        parser.add_argument('--separate-aux-token-encoder', action='store_true', default=False, help='Separate weights to encode other sentence like in Quickthought')
 
         # fmt: on
 
@@ -383,7 +385,25 @@ class LSTMEncoderModel(FairseqEncoderModel):
             pretrained_embed=pretrained_encoder_embed,
             max_source_positions=max_source_positions,
         )
-        return cls(args, encoder)
+
+        model = cls(args, encoder)
+
+        if args.separate_aux_token_encoder:
+            model.aux_encoder = LSTMEncoder(
+                dictionary=task.source_dictionary,
+                embed_dim=args.encoder_embed_dim,
+                hidden_size=args.encoder_hidden_size,
+                num_layers=args.encoder_layers,
+                dropout_in=args.encoder_dropout_in,
+                dropout_out=args.encoder_dropout_out,
+                bidirectional=args.encoder_bidirectional,
+                pretrained_embed=copy.deepcopy(pretrained_encoder_embed),
+                max_source_positions=max_source_positions,
+            )
+        else:
+            model.aux_encoder = None
+
+        return model
 
     def set_sequence_embedding_head(self):
         self.sequence_embedding_head = LSTMSequenceEmbeddingHead(self.args.seq_embedding_reduction)
@@ -425,7 +445,8 @@ class LSTMEncoderModel(FairseqEncoderModel):
         if aux_tokens is not None and CLASSIFICATION_HEAD_RANKING in self.classification_heads:
             assert self.sequence_embedding_head is not None, "Classification head requires sequence embedding head"
 
-            x_aux = self.encoder(aux_tokens, src_lengths=aux_lengths, enforce_sorted=False)
+            aux_model = self.aux_encoder if self.aux_encoder is not None else self.encoder
+            x_aux = aux_model(aux_tokens, src_lengths=aux_lengths, enforce_sorted=False)
             x_aux = self.sequence_embedding_head(x_aux)
             x = self.classification_heads[CLASSIFICATION_HEAD_RANKING](x, x_aux)
             # add dummy because the sentence ranking loss expects this
@@ -945,3 +966,4 @@ def base_architecture_encoder(args):
     args.encoder_dropout_out = getattr(args, 'encoder_dropout_out', args.dropout)
     args.classification_head_hidden = getattr(args, 'classification_head_hidden', args.encoder_hidden_size)
     args.classification_head_type = getattr(args, 'classification_head_type', 'learned')
+    args.separate_aux_token_encoder = getattr(args, 'separate_aux_token_encoder', False)
