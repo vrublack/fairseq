@@ -352,6 +352,9 @@ def add_preprocess_args(parser):
                        help="Pad dictionary size to be multiple of N")
     group.add_argument("--workers", metavar="N", default=1, type=int,
                        help="number of parallel workers")
+    group.add_argument("--components", default=None, nargs='+',
+                       help='Multiple components if specified. Expected input path is [trainprefix]-[comp1] '
+                            'for train set and the first component, for example.')
     # fmt: on
     return parser
 

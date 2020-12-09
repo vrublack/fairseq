@@ -52,22 +52,14 @@ class ParaphraseDiscriminationTask(FairseqTask):
                             help='max number of tokens in the source sequence')
         parser.add_argument('--num-classes', type=int, default=-1, help='Dummy arg')
         parser.add_argument('--headless', action='store_true', default=False)
+        parser.add_argument("-s", "--source-lang", default=None, metavar="SRC",
+                           help="source language")
 
     def __init__(self, args, dictionary):
         super().__init__(args)
 
         self.args = args
         self.dictionary = dictionary
-
-    @classmethod
-    def load_dictionary(cls, args, filename, source=True):
-        """Load the dictionary from the filename
-
-        Args:
-            filename (str): the filename
-        """
-        dictionary = Dictionary.load(filename)
-        return dictionary
 
     @classmethod
     def setup_task(cls, args, **kwargs):
@@ -78,11 +70,7 @@ class ParaphraseDiscriminationTask(FairseqTask):
             args.num_classes = 2
 
         # load data dictionary
-        data_dict = cls.load_dictionary(
-            args,
-            os.path.join(args.data, 'dict.txt'),
-            source=True,
-        )
+        data_dict = cls.load_dictionary(os.path.join(args.data, f'dict.{args.source_lang}.txt'))
         logger.info('dictionary length {}'.format(len(data_dict)))
         return ParaphraseDiscriminationTask(args, data_dict)
 
@@ -93,9 +81,10 @@ class ParaphraseDiscriminationTask(FairseqTask):
         comp_names = ['anchor', 'positive', 'negative']
         for component in comp_names:
             comps[component] = data_utils.load_indexed_dataset(
-                osp.join(self.args.data, split, component),
+                osp.join(self.args.data, '{}.{}-{}.{}'.format(
+                    split + '-' + component, self.args.source_lang, None, self.args.source_lang)),
                 self.dictionary,
-                'raw',
+                self.args.dataset_impl,
                 combine=combine,
             )
 

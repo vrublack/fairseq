@@ -248,6 +248,19 @@ def main(args):
                 outprefix = "test{}".format(k) if k > 0 else "test"
                 make_dataset(vocab, testpref, outprefix, lang, num_workers=args.workers)
 
+    def make_all_components(lang, vocab, components, trainpref, validpref, testpref):
+        for comp in components:
+            if trainpref:
+                make_dataset(vocab, trainpref + '-' + comp, 'train-' + comp, lang, num_workers=args.workers)
+            if validpref:
+                for k, validpref in enumerate(validpref.split(",")):
+                    outprefix = "valid{}".format(k) if k > 0 else "valid"
+                    make_dataset(vocab, validpref + '-' + comp, outprefix + '-' + comp, lang, num_workers=args.workers)
+            if testpref:
+                for k, testpref in enumerate(testpref.split(",")):
+                    outprefix = "test{}".format(k) if k > 0 else "test"
+                    make_dataset(vocab, testpref + '-' + comp, outprefix + '-' + comp, lang, num_workers=args.workers)
+
     def make_all_style_tokens(lang, vocab, validpref, testpref):
         if validpref:
             for k, validpref in enumerate(validpref.split(",")):
@@ -272,9 +285,19 @@ def main(args):
         if args.testpref and os.path.exists(args.testpref + "." + args.align_suffix):
             make_binary_alignment_dataset(args.testpref + "." + args.align_suffix, "test.align", num_workers=args.workers)
 
-    make_all(args.source_lang, src_dict, args.trainpref, args.validpref, args.testpref)
-    if target:
-        make_all(args.target_lang, tgt_dict, args.trainpref, args.validpref, args.testpref)
+    if args.components is not None:
+        make_all_components(args.source_lang, src_dict, args.components, args.trainpref, args.validpref, args.testpref)
+        if target:
+            make_all_components(args.target_lang, tgt_dict, args.components, args.trainpref, args.validpref, args.testpref)
+
+        if args.validpref_style or args.testpref_style or \
+           args.trainpref_style_embeddings or args.trainpref_style_embeddings or args.validpref_style_embeddings \
+           or args.align_suffix or args.alignfile:
+            raise NotImplementedError
+    else:
+        make_all(args.source_lang, src_dict, args.trainpref, args.validpref, args.testpref)
+        if target:
+            make_all(args.target_lang, tgt_dict, args.trainpref, args.validpref, args.testpref)
     make_all_style_tokens(args.target_lang, tgt_dict, args.validpref_style, args.testpref_style)
     make_all_style_embeddings(args.target_lang, args.trainpref_style_embeddings, args.validpref_style_embeddings, args.testpref_style_embeddings)
     if args.align_suffix:
