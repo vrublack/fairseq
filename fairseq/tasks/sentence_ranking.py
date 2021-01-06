@@ -59,6 +59,7 @@ class SentenceRankingTask(FairseqTask):
                                  'e.g., "train,valid" (default: all dataset splits)')
         parser.add_argument('--max-option-length', type=int,
                             help='max length for each option')
+        parser.add_argument("-s", "--source-lang", default=None, metavar="SRC", help="source language")
 
     def __init__(self, args, dictionary):
         super().__init__(args)

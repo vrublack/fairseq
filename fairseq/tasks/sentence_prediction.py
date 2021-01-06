@@ -67,6 +67,7 @@ class SentencePredictionTask(FairseqTask):
         parser.add_argument('--max-positions', default=1024, type=int, metavar='N',
                             help='max number of tokens in the source sequence')
         parser.add_argument('--headless', action='store_true', default=False)
+        parser.add_argument("-s", "--source-lang", default=None, metavar="SRC", help="source language")
 
 
     def __init__(self, args, data_dictionary, label_dictionary):
